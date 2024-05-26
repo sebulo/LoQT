@@ -1,0 +1,27 @@
+torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
+    --model_config configs/llama_13b.json \
+    --lr 0.01 \
+    --rank 1024 \
+    --update_proj_gap 200 \
+    --batch_size 1 \
+    --total_batch_size 512 \
+    --num_training_steps 100000 \
+    --scheduler_effective_training_steps 100000 \
+    --warmup_steps 10000 \
+    --weight_decay 0 \
+    --dtype bfloat16 \
+    --eval_every 500 \
+    --optimizer adamw8bit_per_layer \
+    --use_loqt True\
+    --lora_alpha 0.5 \
+    --proj_type std\
+    --use_eigenh_for_projection True\
+    --compensate_quant_error_iterations 5 \
+    --bnb_4bit_quant_type nf4 \
+    --quantize_w '4bit' \
+    --use_double_quant True \
+    --quantize_projection_matrix '4bit' \
+    --use_double_quant True \
+    --single_gpu \
+    --use_offloading True \
+    --name loqt8bit \
