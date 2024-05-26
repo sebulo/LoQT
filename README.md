@@ -85,7 +85,7 @@ Continued pre-training example is available in the `scripts/continued_pretrainin
 More details can be found in torchrun_main.py for pretraining and run_glue.py for fine-tuning.
 
 ## Memory Usage
-To log the memory usage, you can run the scripts in the folder `memory_profiling`. This script `all.sh` logs the memory usage of the model with and without quantization for LoQT, GaLore, and the regular Adam optimizer. The memory profiling is done for both 16-bit and 8-bit optimizers. Additionally, for GaLore and LoQT, per-layer gradient updates are also run.
+To compare memory usage across different model configuraions, you can run the scripts in the folder `memory_profiling`. This script `all.sh` logs the memory usage of the model with and without quantization for LoQT, GaLore, and the regular Adam optimizer. The memory profiling is done for both 16-bit and 8-bit optimizers. Additionally, for GaLore and LoQT, per-layer gradient updates are also run.
 `13b_rank1024_loqt.sh` logs the memory usage of the 13B model with a rank of 1024 for LoQT.
 
 ### Running the Script
