@@ -120,6 +120,8 @@ For fine-tuning benchmarks using DeBERTa-v3 on GLUE tasks, navigate to the finet
 ## Acknowledgements 
 Parts of the code are based on the repository by Jiawei Zhao et al.: https://github.com/jiaweizhao/GaLore
 
+This work was supported by Danish Data Science Academy, which is funded by the Novo Nordisk Foundation (NNF21SA0069429) and VILLUM FONDEN (40516)
+
 
 ## Citation
 If you use this codebase in your work, please cite our paper:
