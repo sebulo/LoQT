@@ -32,9 +32,7 @@ conda activate loqt
 
 ## Usage Examples
 
-
-
-Pre-training
+### Pre-training
 
 To run a sample script for pre-training a 350m Llama 2 model, use the following command:
 
@@ -42,13 +40,27 @@ To run a sample script for pre-training a 350m Llama 2 model, use the following 
 bash scripts/benchmark_pretraining/350m_loqt8bit.sh
 ```
 
-Fine-tuning
+### Adapting Language Models
+
+We provide baseline scripts for tuning Llama2 and Llama3 from Meta.
+
+```sh
+bash scripts/continued_pretraining/llama2_7b_ic3.sh
+```
+
+```sh
+bash /home/vesteinn/projects/loqt/LoQT/scripts/continued_pretraining/llama3_8b_ic3.sh
+```
+
+### Fine-tuning for Natural Language Understanding
 
 To run a sample script for fine-tuning, use the following command:
 
 ```sh
 bash scripts/finetuning_deberta/finetune_cola.sh
 ```
+
+### Example script
 
 To run a specific training configuration, you can use the following command:
       
