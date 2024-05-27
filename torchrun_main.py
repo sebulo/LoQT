@@ -67,7 +67,7 @@ def parse_args(args):
     parser.add_argument("--save_every", type=int, default=10000)
     parser.add_argument("--save_dir", type=str, default='checkpoints')
     parser.add_argument("--tags", type=str, default=None)
-    parser.add_argument("--dtype", type=str, default="bfloat16" if torch.cuda.is_bf16_supported() else "float32")
+    parser.add_argument("--dtype", type=str, default="bfloat16" if torch.cuda.is_bf16_supported() else "float16") # make fallback to fp16
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--name", type=str, default="test")
