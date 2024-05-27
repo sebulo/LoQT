@@ -1,15 +1,15 @@
-# Does not run on 24GB yet
+# Confirmed to work on RTX3090
 
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
-    --model_name meta-llama/Meta-Llama-3-8B \
+    --model_name meta-llama/Llama-2-7b-hf \
     --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
     --use_hf_model \
     --lr 0.0001 \
     --galore_scale 0.25 \
     --rank 1024 \
-    --update_proj_gap 10000 \
+    --update_proj_gap 4 \
     --batch_size 1 \
-    --total_batch_size 512 \
+    --total_batch_size 2 \
     --num_training_steps 60000 \
     --warmup_steps 6000 \
     --dtype bfloat16 \
@@ -18,15 +18,14 @@ torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --lora_alpha 0.5 \
     --bnb_4bit_quant_type nf4 \
     --quantize_w '4bit' \
-    --use_offloading True \
     --quantize_projection_matrix '4bit' \
     --seed 42 \
     --save_every 1000 \
     --save_dir checkpoints/llama8b_ic3 \
     --proj_gap_progression "exponential" \
     --increment_size 1.15 \
-    --name llam3_8b_WP_Qloft_proj_gap1.15_100_icelandic \
+    --name llam2_7b_WP_Qloft_proj_gap1.15_100_icelandic \
     --use_offloading True \
     --use_double_quant True \
-    --use_loqt True\
-    --single_gpu
+    --use_loqt True \
+    --single_gpu 
