@@ -1,5 +1,3 @@
-# Does not run on 24GB yet
-
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --model_name meta-llama/Meta-Llama-3-8B \
     --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
@@ -18,7 +16,6 @@ torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --lora_alpha 0.5 \
     --bnb_4bit_quant_type nf4 \
     --quantize_w '4bit' \
-    --use_offloading True \
     --quantize_projection_matrix '4bit' \
     --seed 42 \
     --save_every 1000 \

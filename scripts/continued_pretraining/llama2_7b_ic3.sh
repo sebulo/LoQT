@@ -1,5 +1,3 @@
-# Confirmed to work on RTX3090
-
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --model_name meta-llama/Llama-2-7b-hf \
     --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
