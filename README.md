@@ -47,7 +47,7 @@ Fine-tuning
 To run a sample script for fine-tuning, use the following command:
 
 ```sh
-bash scripts/benchmark_finetuning/finetune_cola.sh
+bash scripts/finetuning_deberta/finetune_cola.sh
 ```
 
 To run a specific training configuration, you can use the following command:
