@@ -13,7 +13,6 @@ LoQT allows for the pre-training of a 13B LLM on a 24GB GPU without model parall
 - [Usage Examples](#usage-examples)
 - [Memory Usage](#memory-usage)
 - [Benchmarks](#benchmarks)
-- [Discussion](#discussion)
 - [Acknowledgements](#acknowledgements)
 - [Citation](#citation)
 
@@ -117,11 +116,6 @@ declare -a models_and_ranks=("llama_7b:1024")
 To run the benchmark pre-training scripts, navigate to the benchmark_pretraining folder. The scripts are named after the model size.
 
 For fine-tuning benchmarks using DeBERTa-v3 on GLUE tasks, navigate to the finetuning_deberta folder. The scripts are named after the task.
-
-
-## Discussion
-We created a discussion a channel for questions and discussions about the codebase. You can join the channel by following this link: (COMING SOON) 
-
 
 ## Acknowledgements 
 Parts of the code are based on the repository by Jiawei Zhao et al.: https://github.com/jiaweizhao/GaLore
