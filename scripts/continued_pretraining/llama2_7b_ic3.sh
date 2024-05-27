@@ -1,3 +1,20 @@
+#!/bin/bash
+# normal cpu stuff: allocate cpus, memory
+#SBATCH --output=output_files/job.%j.out      # Name of output file (%j expands to jobId)
+# we run on the gpu partition and we allocate 2 titanx gpus
+#SBATCH -p gpu --gres=gpu:titanx:1
+#We expect that our program should not run longer than 4 hours
+#Note that a program will be killed once it exceeds this time!
+#SBATCH --time=72:00:00
+
+
+echo "Running on $(hostname):"
+nvidia-smi
+
+eval "$(conda shell.bash hook)"
+conda activate galora
+
+
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --model_name meta-llama/Llama-2-7b-hf \
     --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
