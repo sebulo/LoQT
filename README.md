@@ -1,7 +1,5 @@
 # LoQT
-
-This repository contains the pre-release version of the code accompanying the paper "LoQT: Low Rank Adapters for Quantized Training". Note that this is an early version of the codebase.
-
+This repository contains the pre-release version of the code accompanying the paper <a href="https://arxiv.org/abs/2405.16528" target="_blank">"LoQT: Low Rank Adapters for Quantized Training"</a>. Note that this is an early version of the codebase.
 LoQT is a method for training quantized models with low-rank adapters, aimed at reducing the number of parameters in large language models. This method is implemented in PyTorch and enables efficient quantized pre-training and fine-tuning of models, achieving results close to full-rank, non-quantized models. 
 
 LoQT allows for the pre-training of a 13B LLM on a 24GB GPU without model parallelism, checkpointing, or offloading strategies during training.

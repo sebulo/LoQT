@@ -182,3 +182,6 @@ LoQT/LoQT/checkpoints
 *__pycache__
 
 *flag_file
+
+# ignore all starting with ssh_
+ssh_*
