@@ -42,14 +42,14 @@ bash scripts/benchmark_pretraining/350m_loqt8bit.sh
 
 ### Adapting Language Models
 
-We provide baseline scripts for tuning Llama2 and Llama3 from Meta.
+We also provide example scripts for tuning Llama2 and Llama3 from Meta.
 
 ```sh
 bash scripts/continued_pretraining/llama2_7b_ic3.sh
 ```
 
 ```sh
-bash /home/vesteinn/projects/loqt/LoQT/scripts/continued_pretraining/llama3_8b_ic3.sh
+bash scripts/continued_pretraining/llama3_8b_ic3.sh
 ```
 
 ### Fine-tuning for Natural Language Understanding
