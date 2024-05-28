@@ -24,4 +24,4 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
     --use_double_quant True \
     --single_gpu \
     --use_offloading True \
-    --name loqt8bit \
+    --name loqt8bit 
