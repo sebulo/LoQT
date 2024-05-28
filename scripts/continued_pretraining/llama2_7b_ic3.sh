@@ -1,3 +1,4 @@
+# tested on 3090 w bsz 1, 4, 8, nvidia driver 535 
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --model_name meta-llama/Llama-2-7b-hf \
     --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
@@ -5,9 +6,9 @@ torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --lr 0.0001 \
     --galore_scale 0.25 \
     --rank 1024 \
-    --update_proj_gap 4 \
-    --batch_size 1 \
-    --total_batch_size 2 \
+    --update_proj_gap 10000 \
+    --batch_size 8 \
+    --total_batch_size 512 \
     --num_training_steps 60000 \
     --warmup_steps 6000 \
     --dtype bfloat16 \
