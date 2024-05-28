@@ -137,11 +137,11 @@ This work was supported by Danish Data Science Academy, which is funded by the N
 If you use this codebase in your work, please cite our paper:
 ```bibtex
 @misc{loeschcke2024loqt,
-      title={LoQT: Low Rank Adapters for Quantized Training}, 
-      author={Sebastian Loeschcke and Mads Toftrup and Michael J. Kastoryano and Serge Belongie and Vésteinn Snæbjarnarson},
-      year={2024},
-      eprint={2405.16528},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+    title={LoQT: Low Rank Adapters for Quantized Training},
+    author={Sebastian Loeschcke and Mads Toftrup and Michael J. Kastoryano and Serge Belongie and Vésteinn Snæbjarnarson},
+    year={2024},
+    eprint={2405.16528},
+    archivePrefix={arXiv},
+    primaryClass={cs.LG}
 }
 ```
