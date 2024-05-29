@@ -177,11 +177,16 @@ class LoQTModel(nn.Module):
                 repr_str += f"\n  ({name}): {param.size()}"
         return repr_str
     
-    def save_pretrained(self, path):
+    def save_pretrained(self, path, save_dequantized_model=False):
         # Ensure all parameters are contiguous
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
-        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
+        if save_dequantized_model:
+            model = self.return_dequantized_model()
+            torch.save(model, os.path.join(path, "dequantized_model.pth"))
+        # Save the full model
+        else:
+            torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
@@ -226,7 +231,6 @@ class LoQTModel(nn.Module):
         replace_lora_linear(new_model)
         
         return new_model
-    
                     
 
     def to(self, *args, **kwargs):
