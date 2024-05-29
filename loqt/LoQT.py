@@ -200,17 +200,14 @@ class LoQTModel(nn.Module):
             for module in self.modules():
                 if isinstance(module, LoraLinear):
                     module.maybe_dequantize_LoRA_factors()
+                    # Merge the LoRA factors into the main weight matrix
+                    A = module.lora_A.weight.T
+                    B = module.lora_B.weight.T
+                    AB = module.scaling * (A @ B).T.detach()
+                    W = module.W.weight 
+                    W_new = W + AB
+                    module.W.weight.data = W_new
         
-        # Merge the LoRA factors into the main weight matrix
-        for module in self.modules():
-            if isinstance(module, LoraLinear):
-                A = module.lora_A.weight.T
-                B = module.lora_B.weight.T
-                AB = module.scaling * (A @ B).T.detach()
-                W = module.W.weight 
-                W_new = W + AB
-                module.W.weight.data = W_new
-
         # Create a new model with only the dequantized weights
         new_model = self.wrapped_model
 
@@ -229,6 +226,7 @@ class LoQTModel(nn.Module):
         replace_lora_linear(new_model)
         
         return new_model
+    
                     
 
     def to(self, *args, **kwargs):
@@ -429,6 +427,7 @@ class LoraLinear(nn.Module):
         
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
         return W_output + (self.scaling*lora_output)
+    
     def optimize_quant_and_lora_jointly(self, P):
         proj_type = self.proj_type
         # Check if the original W layer has a bias
