@@ -64,6 +64,7 @@ class LoQTModel(nn.Module):
         self.device = device
         self.forward = self.wrapped_model.forward
         self.proj_type = proj_type
+        self.quantize_w = quantize_w
         self.quantize_projection_matrix = quantize_projection_matrix
         self.use_offloading = use_offloading
         self.is_single_gpu = is_single_gpu
@@ -194,19 +195,17 @@ class LoQTModel(nn.Module):
         model2 = torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
         return model2
     
-    def return_dequantized_model(self):
+    def return_regular_model(self):
         # Dequantize the weights if they are quantized
-        if self.quantize_w == '4bit' and self.quantize_projection_matrix == '4bit':
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    module.maybe_dequantize_LoRA_factors()
-                    # Merge the LoRA factors into the main weight matrix
-                    A = module.lora_A.weight.T
-                    B = module.lora_B.weight.T
-                    AB = module.scaling * (A @ B).T.detach()
-                    W = module.W.weight 
-                    W_new = W + AB
-                    module.W.weight.data = W_new
+        
+        for module in self.modules():
+            if isinstance(module, LoraLinear):
+                module.maybe_dequantize_LoRA_factors()
+                # Merge the LoRA factors into the main weight matrix
+                AB = module.scaling * (module.lora_A.weight.T @ module.lora_B.weight.T).T.detach()
+                W_deq = bnb_F.dequantize_4bit(module.W.weight, module.W.weight.quant_state, quant_type=module.bnb_4bit_quant_type)
+                W_deq = W_deq.to(dtype=module.compute_dtype)                
+                module.W.weight.data = W_deq + AB
         
         # Create a new model with only the dequantized weights
         new_model = self.wrapped_model
