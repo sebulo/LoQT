@@ -193,6 +193,43 @@ class LoQTModel(nn.Module):
     def from_pretrained(cls, path, device):
         model2 = torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
         return model2
+    
+    def return_dequantized_model(self):
+        # Dequantize the weights if they are quantized
+        if self.quantize_w == '4bit' and self.quantize_projection_matrix == '4bit':
+            for module in self.modules():
+                if isinstance(module, LoraLinear):
+                    module.maybe_dequantize_LoRA_factors()
+        
+        # Merge the LoRA factors into the main weight matrix
+        for module in self.modules():
+            if isinstance(module, LoraLinear):
+                A = module.lora_A.weight.T
+                B = module.lora_B.weight.T
+                AB = module.scaling * (A @ B).T.detach()
+                W = module.W.weight 
+                W_new = W + AB
+                module.W.weight.data = W_new
+
+        # Create a new model with only the dequantized weights
+        new_model = self.wrapped_model
+
+        # Replace the LoraLinear modules with standard Linear modules
+        def replace_lora_linear(module):
+            for name, child in module.named_children():
+                if isinstance(child, LoraLinear):
+                    new_linear = nn.Linear(child.in_features, child.out_features, bias=child.W.bias is not None).to(self.device)
+                    new_linear.weight.data = child.W.weight.data.clone()
+                    if child.W.bias is not None:
+                        new_linear.bias.data = child.W.bias.data.clone()
+                    setattr(module, name, new_linear)
+                else:
+                    replace_lora_linear(child)
+        
+        replace_lora_linear(new_model)
+        
+        return new_model
+                    
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
