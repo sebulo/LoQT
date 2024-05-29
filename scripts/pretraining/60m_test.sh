@@ -8,10 +8,10 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
     --update_proj_gap 50 \
     --batch_size 512 \
     --total_batch_size 512 \
-    --num_training_steps 100 \
+    --num_training_steps 500 \
     --warmup_steps 10 \
-    --eval_every 30 \
-    --save_every 60 \
+    --eval_every 0 \
+    --save_every 100 \
     --dtype bfloat16 \
     --optimizer adamw \
     --use_loqt True\
@@ -21,5 +21,6 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
     --single_gpu \
+    --run_eval False \
     --name 60m_LoQT
-    #--continue_from 'checkpoints/60m_LoQT_1716992064/latest_checkpoint' \
+    #--continue_from 'checkpoints/60m_LoQT_1716997317/latest_checkpoint' \

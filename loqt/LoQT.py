@@ -183,7 +183,7 @@ class LoQTModel(nn.Module):
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
         if save_dequantized_model:
-            model = self.return_dequantized_model()
+            model = self.return_regular_model()
             torch.save(model, os.path.join(path, "dequantized_model.pth"))
         # Save the full model
         else:
@@ -201,7 +201,6 @@ class LoQTModel(nn.Module):
         return model2
     
     def return_regular_model(self):
-        # Dequantize the weights if they are quantized
         
         for module in self.modules():
             if isinstance(module, LoraLinear):
