@@ -13,14 +13,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the tokenizer and the LLaMA model configuration
-    model_config_path = "configs/llama_60m.json"
-    config = AutoConfig.from_pretrained(model_config_path)
     tokenizer = AutoTokenizer.from_pretrained("t5-base", model_max_length=256)
 
-    # Load the LLaMA model
-    model = AutoModelForCausalLM.from_config(config)
-
-    continue_from_checkpoint = 'checkpoints/60m_LoQT_1716992064/latest_checkpoint'
+    continue_from_checkpoint = 'checkpoints/60m_LoQT_1716997317/latest_checkpoint'
     loqt_model = LoQTModel.from_pretrained(continue_from_checkpoint, device)
     # checkpoints/60m_LoQT_1716992064/latest_checkpoint
 
@@ -29,6 +24,8 @@ def main():
     inputs = tokenizer(input_text, return_tensors="pt").to(device)
 
     # Perform a forward pass with the LoQT model
+    print('loqt_model',loqt_model)
+    
     loqt_model = loqt_model.to(device)
     loqt_model.eval()
     with torch.no_grad():
@@ -36,7 +33,7 @@ def main():
 
     # Call return_regular_model to get the model with only the dequantized layers
     regular_model = loqt_model.return_regular_model()
-
+    print('loqt_model', regular_model)
     # Perform a forward pass with the dequantized model
     regular_model = regular_model.to(device)
     regular_model.eval()
@@ -45,6 +42,9 @@ def main():
 
     # Compare the outputs
     diff = (output_loqt.logits - output_dequantized.logits).abs().mean().item()
+    print("Difference mean:", diff)
+    diff = (output_loqt.logits - output_dequantized.logits).abs()
+    print('proportion of zeros:', (diff == 0).sum().item() / diff.numel())
     print("Difference:", diff)
     print('output_loqt.logits',output_loqt.logits)
     print('output_dequantized.logits',output_dequantized.logits)
