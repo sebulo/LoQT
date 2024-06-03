@@ -15,7 +15,8 @@ def main():
     # Load the tokenizer and the LLaMA model configuration
     tokenizer = AutoTokenizer.from_pretrained("t5-base", model_max_length=256)
 
-    continue_from_checkpoint = 'checkpoints/60m_LoQT_1716997317/latest_checkpoint'
+    #continue_from_checkpoint = 'checkpoints/60m_LoQT_1716997317/latest_checkpoint'
+    continue_from_checkpoint = 'checkpoints/60m_LoQT_1717416812/latest_checkpoint'
     loqt_model = LoQTModel.from_pretrained(continue_from_checkpoint, device)
     # checkpoints/60m_LoQT_1716992064/latest_checkpoint
 
