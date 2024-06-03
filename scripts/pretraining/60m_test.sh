@@ -5,13 +5,13 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
     --lr 0.01 \
     --rank 128 \
     --lora_alpha 0.4 \
-    --update_proj_gap 50 \
+    --update_proj_gap 100 \
     --batch_size 512 \
     --total_batch_size 512 \
-    --num_training_steps 500 \
-    --warmup_steps 10 \
-    --eval_every 0 \
-    --save_every 100 \
+    --num_training_steps 10000 \
+    --warmup_steps 1000 \
+    --eval_every 1000 \
+    --save_every 1000 \
     --dtype bfloat16 \
     --optimizer adamw \
     --use_loqt True\
