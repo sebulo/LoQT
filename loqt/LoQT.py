@@ -9,6 +9,7 @@ from typing import List
 import torch.distributed as dist
 from loqt.utils import create_zero_initialized_linear_layer, eigenH_decomposition
 from loqt.bnb_with_gradient import LinearNF4WithGradient
+import copy
 
 @dataclass
 class LoQT_Config:
@@ -201,7 +202,7 @@ class LoQTModel(nn.Module):
         return model2
     
     def return_regular_model(self):
-        
+
         for module in self.modules():
             if isinstance(module, LoraLinear):
                 module.maybe_dequantize_LoRA_factors()
@@ -211,8 +212,13 @@ class LoQTModel(nn.Module):
                 W_deq = W_deq.to(dtype=module.compute_dtype)                
                 module.W.weight.data = W_deq + AB
         
-        # Create a new model with only the dequantized weights
-        new_model = self.wrapped_model
+        device_before = self.device
+        self.to('cpu')
+        # Create a new model with only the dequantized weights        
+        new_model = copy.deepcopy(self.wrapped_model)
+        self.to(device_before)
+
+        
 
         # Replace the LoraLinear modules with standard Linear modules
         def replace_lora_linear(module):

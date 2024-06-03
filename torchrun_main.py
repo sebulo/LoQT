@@ -86,6 +86,7 @@ def parse_args(args):
     
     # LoQT Parameters
     parser.add_argument("--use_loqt", default=False, type=lambda x: x.lower() == "true")
+    parser.add_argument("--save_dequantized_model", default=False, type=lambda x: x.lower() == "true")
     parser.add_argument("--lora_alpha", type=float, default=0.5)
     parser.add_argument('--compensate_quant_error_iterations', type=int, default=0, help='Number of iterations to run the joint optimization of Lora/quant')
     parser.add_argument('--proj_gap_progression', type=str, default="static", choices=["static", "linear", "exponential"])
@@ -539,61 +540,11 @@ def main(args):
             and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
         )
         
-        save_and_load = False
-        if update_step % 25 == 0 and update_step != 0 and not should_reset_B and global_step % args.gradient_accumulation== 0:
-            if save_and_load:
-                #breakpoint()
-                unique_id = int(time.time())
-                unique_directory_name = f"loqt_{unique_id}"
-                args.save_dir = os.path.join(args.save_dir, unique_directory_name)
-                # Creating the directory if it doesn't already exist
-                if not os.path.exists(args.save_dir):
-                    os.makedirs(args.save_dir, exist_ok=True)
-                args.continue_from = f"{args.save_dir}/latest_checkpoint"
-                save_checkpoint(
-                    model,
-                    optimizer=optimizer_dict if layer_wise_flag else optimizer,
-                    scheduler=scheduler_dict if layer_wise_flag else scheduler,
-                    update_step=update_step,
-                    global_step=global_step,
-                    run_config=run_config,
-                    tokens_seen=tokens_seen,
-                    tokens_seen_before=tokens_seen_before,
-                    update_time=update_time,
-                    args=args,
-                    logger=logger,
-                    layer_wise_flag=layer_wise_flag
-                )
-                model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
-
+        if update_step % 26 == 0 and update_step != 0 and not should_reset_B and global_step % args.gradient_accumulation== 0:
             compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device, update_step=update_step)
         
         if should_reset_B:
-             # Save and load the model if required
-            if save_and_load:
-                #breakpoint()
-                args.save_dir = os.path.join(args.save_dir, unique_directory_name)
-                # Creating the directory if it doesn't already exist
-                if not os.path.exists(args.save_dir):
-                    os.makedirs(args.save_dir, exist_ok=True)
-                args.continue_from = f"{args.save_dir}/latest_checkpoint"
-                save_checkpoint(
-                    model,
-                    optimizer=optimizer_dict if layer_wise_flag else optimizer,
-                    scheduler=scheduler_dict if layer_wise_flag else scheduler,
-                    update_step=update_step,
-                    global_step=global_step,
-                    run_config=run_config,
-                    tokens_seen=tokens_seen,
-                    tokens_seen_before=tokens_seen_before,
-                    update_time=update_time,
-                    args=args,
-                    logger=logger,
-                    layer_wise_flag=layer_wise_flag
-                )
-                model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
             #compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device=device)
-            compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device, update_step=update_step)
             
             logger.info("Resetting B matrix")
             actual_model = get_model(model)
@@ -702,7 +653,7 @@ def main(args):
                 update_time=update_time,
                 args=args,
                 logger=logger,
-                layer_wise_flag=layer_wise_flag
+                layer_wise_flag=layer_wise_flag,
             )
 
         # evaluation
@@ -765,7 +716,7 @@ def main(args):
                 update_time=update_time,
                 args=args,
                 logger=logger,
-                layer_wise_flag=layer_wise_flag
+                layer_wise_flag=layer_wise_flag,
             )
 
 
@@ -804,6 +755,8 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
 
     # Save the actual model
     actual_model = get_model(model)
+    if args.save_dequantized_model:
+        actual_model.save_pretrained(latest_checkpoint_directory, args.save_dequantized_model)
     actual_model.save_pretrained(latest_checkpoint_directory) 
 
     # Save optimizer and scheduler states
@@ -871,6 +824,7 @@ def load_checkpoint(model, args, logger, device):
     logger.info(f"Model successfully loaded (strict=True policy)")
     return model, global_step, update_step, tokens_seen, tokens_seen_before
 
+@torch.no_grad()
 def compare_model_outputs(model, tokenizer, input_text, device='cpu', update_step=0):
     """
     Compare the outputs of a model with dequantized layers against the regular model.
@@ -888,11 +842,11 @@ def compare_model_outputs(model, tokenizer, input_text, device='cpu', update_ste
     Returns:
         dict: A dictionary containing the differences and outputs.
     """
+    breakpoint()
     # Tokenize and prepare inputs
     inputs = tokenizer(input_text, return_tensors="pt").to(device)
 
     # Evaluate the model with quantized layers
-    model.eval()
     with torch.no_grad():
         output_loqt = model(**inputs)
 
@@ -924,8 +878,11 @@ def compare_model_outputs(model, tokenizer, input_text, device='cpu', update_ste
             
         print("Difference mean:", diff_mean)
         print('Proportion of zeros:', zero_proportion)
+    else:
+        print(model)
+        print(f"Diff 0 at update_step:", update_step)
+        
 
-    model.train()
     return results
 
 if __name__ == "__main__":
