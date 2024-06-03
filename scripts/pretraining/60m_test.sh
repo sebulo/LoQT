@@ -21,6 +21,6 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
     --single_gpu \
-    --run_eval False \
+    --run_final_eval False \
     --name 60m_LoQT
     #--continue_from 'checkpoints/60m_LoQT_1716997317/latest_checkpoint' \

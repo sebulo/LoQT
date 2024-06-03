@@ -348,32 +348,8 @@ def main(args):
     tokens_seen_before = 0
 
     if args.continue_from is not None:
-        logger.info("*" * 40)
-        logger.info(f"Loading model from {args.continue_from}")
-        if args.use_loqt:
-            model = LoQTModel.from_pretrained(args.continue_from, device)
-            model.to(device)
-            print(model)
-        else:
-            # check if file with .bin or .safetensors
-            model = load_model_from_checkpoint(args.continue_from, model)
-
-        training_state = os.path.join(args.continue_from, "training_state.json")
-        if os.path.exists(training_state):
-            with open(training_state) as f:
-                state = json.load(f)
-            global_step = state["global_step"]
-            update_step = state["update_step"]
-            tokens_seen = state["tokens_seen"]
-            tokens_seen_before = state["tokens_seen_before"]
-            logger.info(f"Loaded training state from {training_state}")
-            logger.info(f"global_step: {global_step}, update_step: {update_step}, tokens_seen: {tokens_seen}")  
-            del state
-        else:
-            logger.warning(f"No training state found in {training_state}")
-
-        logger.info(f"Model successfully loaded (strict=True policy)")
-        logger.info("*" * 40)
+        model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
+         
         
     update_steps = get_proj_update_steps(args)
     print(f"Projection update steps: {update_steps}")
@@ -545,6 +521,9 @@ def main(args):
     # Placeholder for a temporary scheduler used after merging
     metrics_to_log = {}
     logging_counter_memory_usage_dict = 0
+    
+    unique_id = int(time.time())
+    unique_directory_name = f"loqt_{unique_id}"
 
     for batch_idx, batch in enumerate(dataloader):
         if batch_idx < skip_batches and args.skip_batches_in_continue_from: 
@@ -560,7 +539,62 @@ def main(args):
             and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
         )
         
+        save_and_load = False
+        if update_step % 25 == 0 and update_step != 0 and not should_reset_B and global_step % args.gradient_accumulation== 0:
+            if save_and_load:
+                #breakpoint()
+                unique_id = int(time.time())
+                unique_directory_name = f"loqt_{unique_id}"
+                args.save_dir = os.path.join(args.save_dir, unique_directory_name)
+                # Creating the directory if it doesn't already exist
+                if not os.path.exists(args.save_dir):
+                    os.makedirs(args.save_dir, exist_ok=True)
+                args.continue_from = f"{args.save_dir}/latest_checkpoint"
+                save_checkpoint(
+                    model,
+                    optimizer=optimizer_dict if layer_wise_flag else optimizer,
+                    scheduler=scheduler_dict if layer_wise_flag else scheduler,
+                    update_step=update_step,
+                    global_step=global_step,
+                    run_config=run_config,
+                    tokens_seen=tokens_seen,
+                    tokens_seen_before=tokens_seen_before,
+                    update_time=update_time,
+                    args=args,
+                    logger=logger,
+                    layer_wise_flag=layer_wise_flag
+                )
+                model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
+
+            compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device, update_step=update_step)
+        
         if should_reset_B:
+             # Save and load the model if required
+            if save_and_load:
+                #breakpoint()
+                args.save_dir = os.path.join(args.save_dir, unique_directory_name)
+                # Creating the directory if it doesn't already exist
+                if not os.path.exists(args.save_dir):
+                    os.makedirs(args.save_dir, exist_ok=True)
+                args.continue_from = f"{args.save_dir}/latest_checkpoint"
+                save_checkpoint(
+                    model,
+                    optimizer=optimizer_dict if layer_wise_flag else optimizer,
+                    scheduler=scheduler_dict if layer_wise_flag else scheduler,
+                    update_step=update_step,
+                    global_step=global_step,
+                    run_config=run_config,
+                    tokens_seen=tokens_seen,
+                    tokens_seen_before=tokens_seen_before,
+                    update_time=update_time,
+                    args=args,
+                    logger=logger,
+                    layer_wise_flag=layer_wise_flag
+                )
+                model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
+            #compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device=device)
+            compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device, update_step=update_step)
+            
             logger.info("Resetting B matrix")
             actual_model = get_model(model)
             
@@ -672,7 +706,7 @@ def main(args):
             )
 
         # evaluation
-        if (update_step + 1) % args.eval_every== 0: # update_step+1 to evaluate just before merging.
+        if args.eval_every != 0 and (update_step + 1) % args.eval_every== 0: # update_step+1 to evaluate just before merging.
             logger.info(f"Performing evaluation at step {update_step}")
             total_loss, evaluated_on_tokens = evaluate_model(
                 model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size, eval_dataset
@@ -788,8 +822,6 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
         })
         torch.save(optimizer_checkpoint, f"{latest_checkpoint_directory}/optimizer.pt")
     else:
-        #optimizer_checkpoint.update({"optimizer_dict": {k: v.state_dict() for k, v in optimizer.items()}})
-        #optimizer_checkpoint.update({"layerwise_optimizers": {name: opt.state_dict() for name, opt in optimizer.items()}})
         optimizer_checkpoint.update({"layerwise_optimizers": {f"param_{i}": opt.state_dict() for i, (param, opt) in enumerate(optimizer.items())}})
         torch.save(optimizer_checkpoint, f"{latest_checkpoint_directory}/layerwise_optimizer.pt")
 
@@ -813,7 +845,88 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
     with open(f"{latest_checkpoint_directory}/wandb.json", "w") as f:
         json.dump(wandb_info, f, indent=4)
 
+def load_checkpoint(model, args, logger, device):
+    logger.info(f"Loading model from {args.continue_from}")
+    if args.use_loqt:
+        model = LoQTModel.from_pretrained(args.continue_from, device)
+        model.to(device)
+        print(model)
+    else:
+        model = load_model_from_checkpoint(args.continue_from, model)
 
+    training_state = os.path.join(args.continue_from, "training_state.json")
+    if os.path.exists(training_state):
+        with open(training_state) as f:
+            state = json.load(f)
+        global_step = state["global_step"]
+        update_step = state["update_step"]
+        tokens_seen = state["tokens_seen"]
+        tokens_seen_before = state["tokens_seen_before"]
+        logger.info(f"Loaded training state from {training_state}")
+        logger.info(f"global_step: {global_step}, update_step: {update_step}, tokens_seen: {tokens_seen}")  
+        del state
+    else:
+        logger.warning(f"No training state found in {training_state}")
+
+    logger.info(f"Model successfully loaded (strict=True policy)")
+    return model, global_step, update_step, tokens_seen, tokens_seen_before
+
+def compare_model_outputs(model, tokenizer, input_text, device='cpu', update_step=0):
+    """
+    Compare the outputs of a model with dequantized layers against the regular model.
+
+    Args:
+        model: The model to evaluate.
+        tokenizer: The tokenizer to preprocess the input text.
+        input_text (str): The input text to be tokenized and fed to the model.
+        device (str): The device to run the model on ('cpu' or 'cuda').
+        save_and_load (bool): Whether to save and immediately load the checkpoint.
+        args: Arguments required for saving the checkpoint.
+        save_logger: Logger required for saving the checkpoint.
+        update_step (int): The current update step for logging purposes.
+
+    Returns:
+        dict: A dictionary containing the differences and outputs.
+    """
+    # Tokenize and prepare inputs
+    inputs = tokenizer(input_text, return_tensors="pt").to(device)
+
+    # Evaluate the model with quantized layers
+    model.eval()
+    with torch.no_grad():
+        output_loqt = model(**inputs)
+
+    # Get the regular model with dequantized layers
+    regular_model = model.return_regular_model()
+    regular_model = regular_model.to(device)
+    regular_model.eval()
+    with torch.no_grad():
+        output_dequantized = regular_model(**inputs)
+
+    # Compare the outputs
+    detailed_diff = (output_loqt.logits - output_dequantized.logits).abs()
+    diff_mean = detailed_diff.mean().item()
+    zero_proportion = (detailed_diff == 0).sum().item() / detailed_diff.numel()
+
+    # Prepare the results
+    results = {
+        "difference_mean": diff_mean,
+        "proportion_of_zeros": zero_proportion,
+        "detailed_difference": detailed_diff,
+        "output_loqt_logits": output_loqt.logits,
+        "output_dequantized_logits": output_dequantized.logits
+    }
+
+    # Print results
+    if diff_mean > 0:
+        if update_step != 0:
+            print("update_step:", update_step)
+            
+        print("Difference mean:", diff_mean)
+        print('Proportion of zeros:', zero_proportion)
+
+    model.train()
+    return results
 
 if __name__ == "__main__":
     print("Starting script")
