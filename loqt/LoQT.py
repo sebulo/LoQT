@@ -212,13 +212,9 @@ class LoQTModel(nn.Module):
                 W_deq = W_deq.to(dtype=module.compute_dtype)                
                 module.W.weight.data = W_deq + AB
         
-        device_before = self.device
-        self.to('cpu')
         # Create a new model with only the dequantized weights        
-        new_model = copy.deepcopy(self.wrapped_model)
-        self.to(device_before)
-
-        
+        new_model = self.wrapped_model
+        new_model.to(self.device)
 
         # Replace the LoraLinear modules with standard Linear modules
         def replace_lora_linear(module):
