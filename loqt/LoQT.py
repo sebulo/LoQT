@@ -9,6 +9,7 @@ from typing import List
 import torch.distributed as dist
 from loqt.utils import create_zero_initialized_linear_layer, eigenH_decomposition
 from loqt.bnb_with_gradient import LinearNF4WithGradient
+import copy
 
 @dataclass
 class LoQT_Config:
@@ -64,6 +65,7 @@ class LoQTModel(nn.Module):
         self.device = device
         self.forward = self.wrapped_model.forward
         self.proj_type = proj_type
+        self.quantize_w = quantize_w
         self.quantize_projection_matrix = quantize_projection_matrix
         self.use_offloading = use_offloading
         self.is_single_gpu = is_single_gpu
@@ -182,7 +184,7 @@ class LoQTModel(nn.Module):
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
         if save_dequantized_model:
-            model = self.return_dequantized_model()
+            model = self.return_regular_model()
             torch.save(model, os.path.join(path, "dequantized_model.pth"))
         # Save the full model
         else:
@@ -199,22 +201,24 @@ class LoQTModel(nn.Module):
         model2 = torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
         return model2
     
-    def return_dequantized_model(self):
-        # Dequantize the weights if they are quantized
-        if self.quantize_w == '4bit' and self.quantize_projection_matrix == '4bit':
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    module.maybe_dequantize_LoRA_factors()
-                    # Merge the LoRA factors into the main weight matrix
-                    A = module.lora_A.weight.T
-                    B = module.lora_B.weight.T
-                    AB = module.scaling * (A @ B).T.detach()
-                    W = module.W.weight 
-                    W_new = W + AB
-                    module.W.weight.data = W_new
+    def return_regular_model(self):
+
+        for module in self.modules():
+            if isinstance(module, LoraLinear):
+                module.maybe_dequantize_LoRA_factors()
+                # Merge the LoRA factors into the main weight matrix
+                AB = module.scaling * (module.lora_A.weight.T @ module.lora_B.weight.T).T.detach()
+                W_deq = bnb_F.dequantize_4bit(module.W.weight, module.W.weight.quant_state, quant_type=module.bnb_4bit_quant_type)
+                W_deq = W_deq.to(dtype=module.compute_dtype)                
+                module.W.weight.data = W_deq + AB
         
-        # Create a new model with only the dequantized weights
-        new_model = self.wrapped_model
+        device_before = self.device
+        self.to('cpu')
+        # Create a new model with only the dequantized weights        
+        new_model = copy.deepcopy(self.wrapped_model)
+        self.to(device_before)
+
+        
 
         # Replace the LoraLinear modules with standard Linear modules
         def replace_lora_linear(module):
