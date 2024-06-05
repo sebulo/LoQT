@@ -1,0 +1,20 @@
+{
+    "target_modules": [
+        "attn",
+        "attention",
+        "mlp"
+    ],
+    "r": 128,
+    "lora_alpha": 0.4,
+    "lora_dropout": 0.1,
+    "trainable_scaling": false,
+    "quantize_w": "4bit",
+    "use_double_quant": false,
+    "proj_type": "std",
+    "quantize_projection_matrix": "4bit",
+    "compensate_quant_error_iterations": 5,
+    "is_single_gpu": true,
+    "only_train_lora": false,
+    "use_offloading": false,
+    "use_eigenh_for_projection": false
+}

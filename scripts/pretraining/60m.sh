@@ -20,4 +20,5 @@ torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
     --compensate_quant_error_iterations 5 \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
+    --save_original_model True \
     --name 60m_LoQT
