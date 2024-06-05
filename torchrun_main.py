@@ -644,24 +644,25 @@ def main(args):
         update_time = time.time() - update_time
 
         # save checkpoint by save_every
-        if local_step > args.gradient_accumulation and args.save_every != 0 and update_step % args.save_every == 0 and global_rank == 0:
+        if local_step > args.gradient_accumulation and args.save_every != 0 and update_step % args.save_every == 0:
             if not args.single_gpu:
                 dist.barrier()
                 broadcast_parameters(actual_model, local_rank)
-            save_checkpoint(
-                model,
-                optimizer=optimizer_dict if layer_wise_flag else optimizer,
-                scheduler=scheduler_dict if layer_wise_flag else scheduler,
-                update_step=update_step,
-                global_step=global_step,
-                run_config=run_config,
-                tokens_seen=tokens_seen,
-                tokens_seen_before=tokens_seen_before,
-                update_time=update_time,
-                args=args,
-                logger=logger,
-                layer_wise_flag=layer_wise_flag,
-            )
+            if global_rank == 0:
+                save_checkpoint(
+                    model,
+                    optimizer=optimizer_dict if layer_wise_flag else optimizer,
+                    scheduler=scheduler_dict if layer_wise_flag else scheduler,
+                    update_step=update_step,
+                    global_step=global_step,
+                    run_config=run_config,
+                    tokens_seen=tokens_seen,
+                    tokens_seen_before=tokens_seen_before,
+                    update_time=update_time,
+                    args=args,
+                    logger=logger,
+                    layer_wise_flag=layer_wise_flag,
+                )
 
         # evaluation
         if args.eval_every != 0 and update_step % args.eval_every== 0: # update_step+1 to evaluate just before merging.
@@ -710,10 +711,10 @@ def main(args):
     if global_rank == 0: pbar.close()
 
     current_model_directory = f"{args.save_dir}/model_{update_step}"
+    if not args.single_gpu:
+        dist.barrier()
+        broadcast_parameters(actual_model, local_rank)
     if global_rank == 0 and not os.path.exists(current_model_directory): 
-        if not args.single_gpu:
-            dist.barrier()
-            broadcast_parameters(actual_model, local_rank)
         save_checkpoint(
                 model,
                 optimizer=optimizer_dict if layer_wise_flag else optimizer,

@@ -42,6 +42,7 @@ def main():
     with torch.no_grad():
         output_original = regular_model(**inputs)
     
+    print("Mean difference in logits", torch.mean(torch.abs(output_loqt.logits - output_original.logits)))
     print('Logits are close', torch.allclose(output_loqt.logits, output_original.logits, atol=1e-1))
     assert torch.allclose(output_loqt.logits, output_original.logits, atol=1e-1), "Outputs are not close!"
 

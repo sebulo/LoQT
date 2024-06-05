@@ -208,21 +208,13 @@ class LoQTModel(nn.Module):
     @classmethod
     def from_pretrained(cls, path, device, saved_as_full_model=False):
         if saved_as_full_model:
-            model2 = torch.load(os.path.join(path, "original_model.pth"), map_location=device)
+            return torch.load(os.path.join(path, "original_model.pth"), map_location=device)
         else:
-            model2 = torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
-        return model2
+            return torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
     
     def return_original_model(self):
-        # Save the original device of the model
-        original_device = next(self.parameters()).device
-        self.wrapped_model.to('cpu')
-
         # Create a deep copy of the wrapped model on CPU to avoid modifying the original model
         new_model = copy.deepcopy(self.wrapped_model)
-
-        # Move the original wrapped model back to its original device
-        self.wrapped_model.to(original_device)
 
         # Loop over new and old modules, dequantize old LoRA factors and merge them into the new weight matrix
         for module_new, module_old in zip(new_model.modules(), self.wrapped_model.modules()):
