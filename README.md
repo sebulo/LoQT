@@ -89,6 +89,11 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
 
 ```
 
+To save the original input model (e.g., a LLaMA2 model) without quantization and the adapter, use the following flag when running the script:
+```sh
+--save_original_model True 
+```
+
 Continued pre-training example is available in the `scripts/continued_pretraining` folder.
 
 More details can be found in torchrun_main.py for pretraining and run_glue.py for fine-tuning.
