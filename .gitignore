@@ -183,5 +183,7 @@ LoQT/LoQT/checkpoints
 
 *flag_file
 
+scripts/tests/test_checkpoints
+
 # ignore all starting with ssh_
 ssh_*

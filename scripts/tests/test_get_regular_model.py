@@ -17,7 +17,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("t5-base", model_max_length=256)
 
     # Checkpoint to test
-    checkpoint = 'scripts/tests/test_checkpoints/60m_LoQT_1717577847/latest_checkpoint'
+    checkpoint = 'CHECKPOINT_PATH' # INSERT YOU CHECKPOINT HERE
     
     try:
         # Load the LoQT model from checkpoint

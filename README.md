@@ -89,14 +89,15 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main.py \
 
 ```
 
+Continued pre-training example is available in the `scripts/continued_pretraining` folder.
+
+More details can be found in torchrun_main.py for pretraining and run_glue.py for fine-tuning.
+
+### Save Original Non-Quantized Model
 To save the original input model (e.g., a LLaMA2 model) without quantization and the adapter, use the following flag when running the script:
 ```sh
 --save_original_model True 
 ```
-
-Continued pre-training example is available in the `scripts/continued_pretraining` folder.
-
-More details can be found in torchrun_main.py for pretraining and run_glue.py for fine-tuning.
 
 ## Memory Usage
 To compare memory usage across different model configuraions, you can run the scripts in the folder `memory_profiling`. This script `all.sh` logs the memory usage of the model with and without quantization for LoQT, GaLore, and the regular Adam optimizer. The memory profiling is done for both 16-bit and 8-bit optimizers. Additionally, for GaLore and LoQT, per-layer gradient updates are also run.
