@@ -9,6 +9,7 @@ from typing import List
 import torch.distributed as dist
 from loqt.utils import create_zero_initialized_linear_layer, eigenH_decomposition
 from loqt.bnb_with_gradient import LinearNF4WithGradient
+import copy
 
 @dataclass
 class LoQT_Config:
@@ -64,6 +65,7 @@ class LoQTModel(nn.Module):
         self.device = device
         self.forward = self.wrapped_model.forward
         self.proj_type = proj_type
+        self.quantize_w = quantize_w
         self.quantize_projection_matrix = quantize_projection_matrix
         self.use_offloading = use_offloading
         self.is_single_gpu = is_single_gpu
@@ -168,6 +170,17 @@ class LoQTModel(nn.Module):
             if isinstance(module, LoraLinear):
                 module.init_LoRA_with_gradient_projections()
                 
+    def quantize_all_lora_linear_layers(self):
+        for module in self.modules():
+            if isinstance(module, LoraLinear):
+                module.quantize_LoRA_AB()
+    
+    def dequantize_all_lora_linear_layers(self):
+        for module in self.modules():
+            if isinstance(module, LoraLinear):
+                module.maybe_dequantize_LoRA_factors()
+
+                
     def __repr__(self):
         repr_str = super().__repr__()
 
@@ -177,11 +190,14 @@ class LoQTModel(nn.Module):
                 repr_str += f"\n  ({name}): {param.size()}"
         return repr_str
     
-    def save_pretrained(self, path):
+    def save_pretrained(self, path, save_original_model=False):
         # Ensure all parameters are contiguous
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
-        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
+        if save_original_model:
+            model_to_save = self.return_original_model()
+            torch.save(model_to_save, os.path.join(path, "original_model.pth"))
+        torch.save(self, os.path.join(path, "loqt_model.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
@@ -190,9 +206,47 @@ class LoQTModel(nn.Module):
             json.dump(self.model_config, f, indent=4)
 
     @classmethod
-    def from_pretrained(cls, path, device):
-        model2 = torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
-        return model2
+    def from_pretrained(cls, path, device, saved_as_full_model=False):
+        if saved_as_full_model:
+            return torch.load(os.path.join(path, "original_model.pth"), map_location=device)
+        else:
+            return torch.load(os.path.join(path, "loqt_model.pth"), map_location=device)
+    
+    def return_original_model(self):
+        # Create a deep copy of the wrapped model on CPU to avoid modifying the original model
+        new_model = copy.deepcopy(self.wrapped_model)
+
+        # Loop over new and old modules, dequantize old LoRA factors and merge them into the new weight matrix
+        for module_new, module_old in zip(new_model.modules(), self.wrapped_model.modules()):
+            if isinstance(module_old, LoraLinear):
+                module_old.maybe_dequantize_LoRA_factors()
+                # Merge the LoRA factors into the main weight matrix
+                AB = module_old.scaling * (module_old.lora_A.weight.T @ module_old.lora_B.weight.T).T.detach()
+                W_deq = bnb_F.dequantize_4bit(module_old.W.weight, module_old.W.weight.quant_state, quant_type=module_old.bnb_4bit_quant_type)
+                W_deq = W_deq.to(dtype=module_old.compute_dtype)
+                # Update the weight data in the new model
+                module_new.W.weight.data = W_deq + AB
+                module_old.quantize_LoRA_AB()
+
+        # Replace LoraLinear modules with standard Linear modules
+        def replace_lora_linear(module):
+            for name, child in module.named_children():
+                if isinstance(child, LoraLinear):
+                    # Create a standard Linear module with the same dimensions and copy the weights
+                    new_linear = nn.Linear(child.in_features, child.out_features, bias=child.W.bias is not None).to(self.device)
+                    new_linear.weight.data = child.W.weight.data.clone()
+                    if child.W.bias is not None:
+                        new_linear.bias.data = child.W.bias.data.clone()
+                    # Replace the child module with the new Linear module
+                    setattr(module, name, new_linear)
+                else:
+                    # Recursively replace LoraLinear modules in the child modules
+                    replace_lora_linear(child)
+
+        replace_lora_linear(new_model)
+
+        return new_model
+    
 
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
@@ -361,10 +415,12 @@ class LoraLinear(nn.Module):
             self.lora_A.grad = None
             self.lora_B.grad = None        
             self.lora_params_disabled = True
+            
     def lora_zero_init(self):
         self.lora_A.weight.data = torch.zeros((self.r, self.in_features), device=self.device, dtype=self.compute_dtype, requires_grad=True)
         self.lora_B.weight.data = torch.zeros((self.out_features, self.r), device=self.device, dtype=self.compute_dtype, requires_grad=True)
         self.quantize_LoRA_AB()
+        
     def zero_initialize_LoRA_AB(self):
         lora_A, lora_B = self.initialize_LoRA_AB()
         self.lora_A_shape = lora_A.weight.shape # in, r
@@ -392,6 +448,7 @@ class LoraLinear(nn.Module):
         
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
         return W_output + (self.scaling*lora_output)
+    
     def optimize_quant_and_lora_jointly(self, P):
         proj_type = self.proj_type
         # Check if the original W layer has a bias
