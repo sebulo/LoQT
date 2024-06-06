@@ -44,6 +44,7 @@ def parse_args(args):
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--use_hf_model", default=False, action="store_true")
     parser.add_argument("--continue_from", type=str, default=None)
+    parser.add_argument("--eval_at_continue_from",  default=True, type=lambda x: x.lower() == "true", help='Perform evaluation just after loading')
     parser.add_argument("--skip_batches_in_continue_from", default=False, type=lambda x: x.lower() == "true")
     parser.add_argument("--batch_size", type=int, required=True)
     parser.add_argument("--gradient_accumulation", type=int, default=None)
@@ -65,6 +66,7 @@ def parse_args(args):
                         help="Number of tokens to train on. Overwrites num_training_steps. "
                              "You can use M and B suffixes, e.g. 100M or 1B.")
     parser.add_argument("--save_every", type=int, default=10000)
+    parser.add_argument("--save_original_model", default=False, type=lambda x: x.lower() == "true", help='Saves both the original and the model with the adapters if True')
     parser.add_argument("--save_dir", type=str, default='checkpoints')
     parser.add_argument("--tags", type=str, default=None)
     parser.add_argument("--dtype", type=str, default="bfloat16" if torch.cuda.is_bf16_supported() else "float16") # make fallback to fp16
@@ -348,33 +350,19 @@ def main(args):
     tokens_seen_before = 0
 
     if args.continue_from is not None:
-        logger.info("*" * 40)
-        logger.info(f"Loading model from {args.continue_from}")
-        if args.use_loqt:
-            model = LoQTModel.from_pretrained(args.continue_from, device)
-            model.to(device)
-            print(model)
-        else:
-            # check if file with .bin or .safetensors
-            model = load_model_from_checkpoint(args.continue_from, model)
-
-        training_state = os.path.join(args.continue_from, "training_state.json")
-        if os.path.exists(training_state):
-            with open(training_state) as f:
-                state = json.load(f)
-            global_step = state["global_step"]
-            update_step = state["update_step"]
-            tokens_seen = state["tokens_seen"]
-            tokens_seen_before = state["tokens_seen_before"]
-            logger.info(f"Loaded training state from {training_state}")
-            logger.info(f"global_step: {global_step}, update_step: {update_step}, tokens_seen: {tokens_seen}")  
-            del state
-        else:
-            logger.warning(f"No training state found in {training_state}")
-
-        logger.info(f"Model successfully loaded (strict=True policy)")
-        logger.info("*" * 40)
+        model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
+        print('Model:', model)
         
+        if args.eval_at_continue_from:
+            print('Performing Evaluation After Loading Model')
+            logger.info(f"Performing evaluation at step {update_step}")
+            total_loss, evaluated_on_tokens = evaluate_model(
+                model, preprocess_batched, tokenizer.pad_token_id, global_rank, world_size, device, args.batch_size, eval_dataset
+            )
+            # Calculate the perplexity based on the total_loss returned from the evaluation
+            perplexity = torch.exp(torch.tensor(total_loss))
+            logger.info(f"Eval loss at step {update_step}: {total_loss}, perplexity: {perplexity}")
+
     update_steps = get_proj_update_steps(args)
     print(f"Projection update steps: {update_steps}")
     
@@ -545,6 +533,9 @@ def main(args):
     # Placeholder for a temporary scheduler used after merging
     metrics_to_log = {}
     logging_counter_memory_usage_dict = 0
+    
+    unique_id = int(time.time())
+    unique_directory_name = f"loqt_{unique_id}"
 
     for batch_idx, batch in enumerate(dataloader):
         if batch_idx < skip_batches and args.skip_batches_in_continue_from: 
@@ -561,6 +552,7 @@ def main(args):
         )
         
         if should_reset_B:
+            
             logger.info("Resetting B matrix")
             actual_model = get_model(model)
             
@@ -623,10 +615,7 @@ def main(args):
         # The below code is only executed during the update step
         if should_reset_B:
             actual_model = get_model(model)
-            time_start_lora_init = time.time()
             actual_model.init_LoRA_with_gradient_projections()
-            lora_init_duration = time.time() - time_start_lora_init
-            logger.info(f"time_start_lora_init: {lora_init_duration:.2f} seconds")
             
             if not layer_wise_flag: 
                 optimizer.zero_grad()
@@ -668,11 +657,11 @@ def main(args):
                 update_time=update_time,
                 args=args,
                 logger=logger,
-                layer_wise_flag=layer_wise_flag
+                layer_wise_flag=layer_wise_flag,
             )
 
         # evaluation
-        if (update_step + 1) % args.eval_every== 0: # update_step+1 to evaluate just before merging.
+        if args.eval_every != 0 and update_step % args.eval_every== 0: # update_step+1 to evaluate just before merging.
             logger.info(f"Performing evaluation at step {update_step}")
             total_loss, evaluated_on_tokens = evaluate_model(
                 model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size, eval_dataset
@@ -718,7 +707,7 @@ def main(args):
     if global_rank == 0: pbar.close()
 
     current_model_directory = f"{args.save_dir}/model_{update_step}"
-    if global_rank == 0 and not os.path.exists(current_model_directory) and args.run_final_eval : 
+    if global_rank == 0 and not os.path.exists(current_model_directory): 
         save_checkpoint(
                 model,
                 optimizer=optimizer_dict if layer_wise_flag else optimizer,
@@ -731,7 +720,7 @@ def main(args):
                 update_time=update_time,
                 args=args,
                 logger=logger,
-                layer_wise_flag=layer_wise_flag
+                layer_wise_flag=layer_wise_flag,
             )
 
 
@@ -764,13 +753,14 @@ def main(args):
 
 
 def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_config, tokens_seen, tokens_seen_before, update_time, args, logger, layer_wise_flag):
+                
     latest_checkpoint_directory = f"{args.save_dir}/latest_checkpoint"
     logger.info(f"Overwriting latest model and optimizer at {latest_checkpoint_directory}, update step {update_step}")
     os.makedirs(latest_checkpoint_directory, exist_ok=True)  # Ensures the directory exists, does nothing if already exists
 
     # Save the actual model
     actual_model = get_model(model)
-    actual_model.save_pretrained(latest_checkpoint_directory) 
+    actual_model.save_pretrained(latest_checkpoint_directory, args.save_original_model if args.save_original_model else False)
 
     # Save optimizer and scheduler states
     optimizer_checkpoint = {
@@ -788,8 +778,6 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
         })
         torch.save(optimizer_checkpoint, f"{latest_checkpoint_directory}/optimizer.pt")
     else:
-        #optimizer_checkpoint.update({"optimizer_dict": {k: v.state_dict() for k, v in optimizer.items()}})
-        #optimizer_checkpoint.update({"layerwise_optimizers": {name: opt.state_dict() for name, opt in optimizer.items()}})
         optimizer_checkpoint.update({"layerwise_optimizers": {f"param_{i}": opt.state_dict() for i, (param, opt) in enumerate(optimizer.items())}})
         torch.save(optimizer_checkpoint, f"{latest_checkpoint_directory}/layerwise_optimizer.pt")
 
@@ -813,7 +801,29 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
     with open(f"{latest_checkpoint_directory}/wandb.json", "w") as f:
         json.dump(wandb_info, f, indent=4)
 
+def load_checkpoint(model, args, logger, device):
+    logger.info(f"Loading model from {args.continue_from}")
+    if args.use_loqt:
+        model = LoQTModel.from_pretrained(args.continue_from, device, saved_as_full_model=args.save_original_model)
+    else:
+        model = load_model_from_checkpoint(args.continue_from, model)
 
+    training_state = os.path.join(args.continue_from, "training_state.json")
+    if os.path.exists(training_state):
+        with open(training_state) as f:
+            state = json.load(f)
+        global_step = state["global_step"]
+        update_step = state["update_step"]
+        tokens_seen = state["tokens_seen"]
+        tokens_seen_before = state["tokens_seen_before"]
+        logger.info(f"Loaded training state from {training_state}")
+        logger.info(f"global_step: {global_step}, update_step: {update_step}, tokens_seen: {tokens_seen}")  
+        del state
+    else:
+        logger.warning(f"No training state found in {training_state}")
+
+    logger.info(f"Model successfully loaded (strict=True policy)")
+    return model, global_step, update_step, tokens_seen, tokens_seen_before
 
 if __name__ == "__main__":
     print("Starting script")
