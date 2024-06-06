@@ -23,7 +23,6 @@ conda env create -f environment.yml
 ```
 This will create a conda environment with all the necessary packages. Make sure to activate the environment:
 
-
 ```
 conda activate loqt
 ```
