@@ -197,7 +197,7 @@ class LoQTModel(nn.Module):
         if save_original_model:
             model_to_save = self.return_original_model()
             torch.save(model_to_save, os.path.join(path, "original_model.pth"))
-        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
+        torch.save(self, os.path.join(path, "loqt_model.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
@@ -210,7 +210,7 @@ class LoQTModel(nn.Module):
         if saved_as_full_model:
             return torch.load(os.path.join(path, "original_model.pth"), map_location=device)
         else:
-            return torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
+            return torch.load(os.path.join(path, "loqt_model.pth"), map_location=device)
     
     def return_original_model(self):
         # Create a deep copy of the wrapped model on CPU to avoid modifying the original model

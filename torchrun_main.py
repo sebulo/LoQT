@@ -88,7 +88,6 @@ def parse_args(args):
     
     # LoQT Parameters
     parser.add_argument("--use_loqt", default=False, type=lambda x: x.lower() == "true")
-    parser.add_argument("--save_dequantized_model", default=False, type=lambda x: x.lower() == "true")
     parser.add_argument("--lora_alpha", type=float, default=0.5)
     parser.add_argument('--compensate_quant_error_iterations', type=int, default=0, help='Number of iterations to run the joint optimization of Lora/quant')
     parser.add_argument('--proj_gap_progression', type=str, default="static", choices=["static", "linear", "exponential"])
@@ -552,9 +551,6 @@ def main(args):
             and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
         )
         
-        if update_step % 26 == 0 and update_step != 0 and not should_reset_B and global_step % args.gradient_accumulation== 0:
-            compare_model_outputs(model, tokenizer, "The quick brown fox jumps over the lazy dog.", device, update_step=update_step)
-        
         if should_reset_B:
             
             logger.info("Resetting B matrix")
@@ -828,67 +824,6 @@ def load_checkpoint(model, args, logger, device):
 
     logger.info(f"Model successfully loaded (strict=True policy)")
     return model, global_step, update_step, tokens_seen, tokens_seen_before
-
-@torch.no_grad()
-def compare_model_outputs(model, tokenizer, input_text, device='cpu', update_step=0):
-    """
-    Compare the outputs of a model with dequantized layers against the regular model.
-
-    Args:
-        model: The model to evaluate.
-        tokenizer: The tokenizer to preprocess the input text.
-        input_text (str): The input text to be tokenized and fed to the model.
-        device (str): The device to run the model on ('cpu' or 'cuda').
-        save_and_load (bool): Whether to save and immediately load the checkpoint.
-        args: Arguments required for saving the checkpoint.
-        save_logger: Logger required for saving the checkpoint.
-        update_step (int): The current update step for logging purposes.
-
-    Returns:
-        dict: A dictionary containing the differences and outputs.
-    """
-    breakpoint()
-    # Tokenize and prepare inputs
-    inputs = tokenizer(input_text, return_tensors="pt").to(device)
-
-    # Evaluate the model with quantized layers
-    with torch.no_grad():
-        output_loqt = model(**inputs)
-
-    # Get the regular model with dequantized layers
-    regular_model = model.return_regular_model()
-    regular_model = regular_model.to(device)
-    regular_model.eval()
-    with torch.no_grad():
-        output_dequantized = regular_model(**inputs)
-
-    # Compare the outputs
-    detailed_diff = (output_loqt.logits - output_dequantized.logits).abs()
-    diff_mean = detailed_diff.mean().item()
-    zero_proportion = (detailed_diff == 0).sum().item() / detailed_diff.numel()
-
-    # Prepare the results
-    results = {
-        "difference_mean": diff_mean,
-        "proportion_of_zeros": zero_proportion,
-        "detailed_difference": detailed_diff,
-        "output_loqt_logits": output_loqt.logits,
-        "output_dequantized_logits": output_dequantized.logits
-    }
-
-    # Print results
-    if diff_mean > 0:
-        if update_step != 0:
-            print("update_step:", update_step)
-            
-        print("Difference mean:", diff_mean)
-        print('Proportion of zeros:', zero_proportion)
-    else:
-        print(model)
-        print(f"Diff 0 at update_step:", update_step)
-        
-
-    return results
 
 if __name__ == "__main__":
     print("Starting script")
