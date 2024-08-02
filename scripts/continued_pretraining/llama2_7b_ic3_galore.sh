@@ -1,7 +1,3 @@
- 
-#  GALORE SCRIPT
-
-
 torchrun --standalone --nproc_per_node 4 torchrun_main.py \
     --model_name /iopsstor/scratch/cscs/vsnbjarn/Llama-2-7b-hf \
     --dataset_name /iopsstor/scratch/cscs/vsnbjarn/raw_pretraining_data \
@@ -29,7 +25,3 @@ torchrun --standalone --nproc_per_node 4 torchrun_main.py \
     --name llam2_7b_1.2_10k_is_galore \
     --wandb_entity PLoRAQ \
     --wandb_project rebuttal
-
-#    --use_offloading True
-
-#    --use_loqt True 

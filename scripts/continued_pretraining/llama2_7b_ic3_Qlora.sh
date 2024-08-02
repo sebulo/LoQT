@@ -1,14 +1,6 @@
- 
-# loqt - our code: run on h200
-# galore - our code: optimizer to galore, use_loqt false
-# full - our code: adam, h200
-
-# lora - new code
-
-
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
-    --model_name meta-llama/Llama-2-7b-hf \
-    --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
+    --model_name /iopsstor/scratch/cscs/vsnbjarn/Llama-2-7b-hf \
+    --dataset_name /iopsstor/scratch/cscs/vsnbjarn/raw_pretraining_data \
     --use_hf_model \
     --lr 0.0002 \
     --galore_scale 0.25 \
@@ -29,7 +21,7 @@ torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --save_dir checkpoints/llama2_7b_ice \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
-    --name llam2_7b_1.2_10k_lora_trainAB \
+    --name llam2_7b_1.2_10k_qlora_trainAB \
     --use_offloading True \
     --use_loqt True \
     --init_lora_AB_as_random_and_zeros True \
@@ -37,5 +29,3 @@ torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --wandb_entity PLoRAQ \
     --wandb_project rebuttal \
     --load_model_to_tmpdir
-
-#--dataset_name /iopsstor/scratch/cscs/vsnbjarn/raw_pretraining_data \

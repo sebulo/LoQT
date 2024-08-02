@@ -1,14 +1,6 @@
- 
-# loqt - our code: run on h200
-# galore - our code: optimizer to galore, use_loqt false
-# full - our code: adam, h200
-
-# lora - new code
-
-
 torchrun --standalone --nproc_per_node 1 torchrun_main.py \
-    --model_name meta-llama/Llama-2-7b-hf \
-    --dataset_name mideind/icelandic-common-crawl-corpus-IC3 \
+    --model_name /iopsstor/scratch/cscs/vsnbjarn/Llama-2-7b-hf \
+    --dataset_name /iopsstor/scratch/cscs/vsnbjarn/raw_pretraining_data \
     --use_hf_model \
     --lr 0.0002 \
     --rank 1024 \
@@ -32,7 +24,4 @@ torchrun --standalone --nproc_per_node 1 torchrun_main.py \
     --init_lora_AB_as_random_and_zeros True \
     --train_projection_matrix True \
     --wandb_entity PLoRAQ \
-    --wandb_project rebuttal \
-    --load_model_to_tmpdir
-
-#--dataset_name /iopsstor/scratch/cscs/vsnbjarn/raw_pretraining_data \
+    --wandb_project rebuttal 
