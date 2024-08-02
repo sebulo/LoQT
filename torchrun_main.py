@@ -134,7 +134,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     model.eval()
     _time = time.time()
     if dataset is None:
-        val_data = datasets.load_dataset("c4", "en", split="validation", streaming=True)
+        val_data = datasets.load_dataset("allenai/c4", "en", split="validation", streaming=True, trust_remote_code=True)
     else:
         val_data = dataset
     val_data = val_data.shuffle(seed=42)
@@ -143,17 +143,23 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     if not args.single_gpu:
         val_data = datasets.distributed.split_dataset_by_node(val_data, rank=global_rank, world_size=world_size)
 
+    # C4 values
+    remove_columns = ["text", "timestamp", "url"]
+    if dataset is not None:
+        # Hard coded for the icelandic dataset
+        remove_columns = ['prefix', 'source', 'target', 'origin', 'text']
+    
     val_data_mapped = val_data.map(
         preprocess_batched,
         batched=True,
-        remove_columns=["text", "timestamp", "url"],
+        remove_columns=remove_columns
     )
     val_data_mapped.batch = lambda batch_size: training_utils.batch_fn(val_data_mapped, batch_size)
 
     target_eval_tokens = args.num_eval_tokens
     evaluated_on_tokens = 0
     total_loss = torch.tensor(0.0).to(device)
-    total_batches = 1
+    total_batches = 0
     logger.info(f"Eval set prepared in {time.time() - _time:.2f} seconds")
 
     for batch in val_data_mapped.batch(batch_size=batch_size):
@@ -161,7 +167,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
             break
         total_batches += 1
 
-        batch = {k: v.to(device) for k, v in batch.items()}
+        batch = {k: torch.tensor(v).to(device) for k, v in batch.items()}
         labels = batch["input_ids"].clone()
         labels[labels == pad_idx] = -100
         loss = model(**batch, labels=labels).loss
@@ -169,7 +175,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
         evaluated_on_tokens += (batch["input_ids"] != pad_idx).sum().item() * world_size
 
-    total_loss = total_loss / total_batches
+    total_loss = total_loss / max(total_batches, 1)
 
     # Gather losses across all GPUs
     gathered_losses = [torch.zeros_like(total_loss) for _ in range(world_size)]
@@ -264,9 +270,8 @@ def main(args):
         logger.info(f"{k:30} {v}")
     logger.info("*" * 40)
 
-
     if args.dataset_name is None:
-        data = datasets.load_dataset("allenai/c4", "en", split="train", streaming=True)
+        data = datasets.load_dataset("allenai/c4", "en", split="train", streaming=True, trust_remote_code=True)
         eval_dataset = None
     # check if folder exists
     elif os.path.exists(args.dataset_name):
@@ -734,7 +739,7 @@ def main(args):
         torch.cuda.empty_cache()
     
         total_loss, evaluated_on_tokens = evaluate_model(
-            model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size
+            model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size, eval_dataset
         )
         perplexity = torch.exp(torch.tensor(total_loss))
         if global_rank == 0:
