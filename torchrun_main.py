@@ -81,6 +81,9 @@ def parse_args(args):
     
     parser.add_argument("--rank", type=int, default=128)
     
+    parser.add_argument("--only_train_lora", default=False, type=lambda x: x.lower() == "true")
+    
+    
     # GaLore parameters
     parser.add_argument("--update_proj_gap", type=int, default=50)
     parser.add_argument("--galore_scale", type=float, default=1.0)
@@ -342,7 +345,12 @@ def main(args):
             is_single_gpu = args.single_gpu,
             model_config = model_config.to_dict(),
             use_eigenh_for_projection=args.use_eigenh_for_projection,
+            only_train_lora=args.only_train_lora,
         )
+    
+    if args.only_train_lora:
+        # disable use_loqt to not update factors while training
+        args.use_loqt = False
 
     global_step = 0
     update_step = 0
