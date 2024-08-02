@@ -549,11 +549,20 @@ def main(args):
         global_step += 1
         local_step += 1
 
+        #should_reset_B = (
+        #    args.use_loqt and 
+        #    update_step in update_steps and
+        #    global_step % args.gradient_accumulation == 0
+        #    and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
+        #)
+
         should_reset_B = (
             args.use_loqt and 
             update_step in update_steps and
-            global_step % args.gradient_accumulation == 0
-            and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
+            global_step % args.gradient_accumulation == 0 and
+            (
+                (update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0)
+            )  # do not merge in last step before final eval. Only if first merge ste
         )
         
         if should_reset_B:
