@@ -4,6 +4,7 @@ import json
 import random
 import argparse
 import numpy as np
+import tempfile
 
 import torch
 import torch.nn as nn
@@ -75,6 +76,16 @@ def parse_args(args):
     parser.add_argument("--name", type=str, default="test")
     parser.add_argument("--grad_clipping", type=float, default=0.0)   
     parser.add_argument("--num_eval_tokens", type=int, default=10000000)
+
+     # ReLoRA Params
+    parser.add_argument("--only_train_lora", default=False, type=lambda x: x.lower() == "true")
+    parser.add_argument("--init_lora_AB_as_random_and_zeros", default=False, type=lambda x: x.lower() == "true")
+    parser.add_argument("--train_projection_matrix", default=False, type=lambda x: x.lower() == "true")
+
+    
+    
+    parser.add_argument("--load_model_to_tmpdir", action="store_true", help="Load model to a temporary directory") # if cashe size is too small to load model from hf
+    
     
     # beta1 for adafactor
     parser.add_argument("--beta1", type=float, default=0.0)
@@ -127,6 +138,32 @@ def parse_args(args):
     args = args_utils.check_args_torchrun_main(args)
     return args
 
+def load_model(args, cache_dir):
+    model = None
+    model_config = None
+
+    def get_pretrained_kwargs():
+        """Helper function to conditionally include cache_dir in kwargs."""
+        if cache_dir:
+            return {'cache_dir': cache_dir}
+        return {}
+
+    if args.model_config is not None:
+        model_config = AutoConfig.from_pretrained(args.model_config, **get_pretrained_kwargs())
+        if args.use_hf_model:
+            model = AutoModelForCausalLM.from_config(model_config, **get_pretrained_kwargs())
+        else:
+            model = LlamaForCausalLM(model_config)
+    elif args.model_name is not None:
+        if args.use_hf_model:
+            model = AutoModelForCausalLM.from_pretrained(args.model_name, **get_pretrained_kwargs())
+        else:
+            model = LlamaForCausalLM.from_pretrained(args.model_name, **get_pretrained_kwargs())
+        model_config = model.config
+    else:
+        raise ValueError("Either model_config or model_name must be provided")
+    
+    return model, model_config
 
 @torch.no_grad()
 def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None):
@@ -314,20 +351,16 @@ def main(args):
     dataset = PreprocessedIterableDataset(data, tokenizer, batch_size=args.batch_size, max_length=args.max_length)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=None, num_workers=args.workers)
     
-    if args.model_config is not None:
-        model_config = AutoConfig.from_pretrained(args.model_config)
-        if args.use_hf_model:
-            model: HF_LlamaForCausalLM = AutoModelForCausalLM.from_config(model_config)
-        else:
-            model = LlamaForCausalLM(model_config)
-    elif args.model_name is not None:
-        if args.use_hf_model:
-            model = AutoModelForCausalLM.from_pretrained(args.model_name)
-        else:
-            model = LlamaForCausalLM.from_pretrained(args.model_name)
-        model_config = model.config
+    model = None
+    model_config = None
+
+    if args.load_model_to_tmpdir:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            print('Using temporary directory for caching:', tmpdirname)
+            model, model_config = load_model(args, tmpdirname)
     else:
-        raise ValueError("Either model_config or model_name must be provided")
+        print('Using Hugging Face cache directory')
+        model, model_config = load_model(args, None)
         
     if args.use_loqt and not args.continue_from:
         logger.info(f"Wrapping model with LoQT")
@@ -347,7 +380,13 @@ def main(args):
             is_single_gpu = args.single_gpu,
             model_config = model_config.to_dict(),
             use_eigenh_for_projection=args.use_eigenh_for_projection,
+            init_lora_AB_as_random_and_zeros=args.init_lora_AB_as_random_and_zeros,
+            train_projection_matrix=args.train_projection_matrix,
+            only_train_lora=args.only_train_lora,
+            
         )
+        if args.only_train_lora:
+            args.use_loqt=False # make sure not to update weights 
 
     global_step = 0
     update_step = 0
@@ -620,7 +659,7 @@ def main(args):
         # The below code is only executed during the update step
         if should_reset_B:
             actual_model = get_model(model)
-            actual_model.init_LoRA_with_gradient_projections()
+            actual_model.reinitialize_LoRA_AB_after_merge()
             
             if not layer_wise_flag: 
                 optimizer.zero_grad()

@@ -27,6 +27,8 @@ class LoQT_Config:
     only_train_lora: bool = False
     use_offloading: bool = False
     use_eigenh_for_projection: bool = False
+    init_lora_AB_as_random_and_zeros: bool = False
+    train_projection_matrix: bool = False
 
 class LoQTModel(nn.Module):
     def __init__(
@@ -50,6 +52,8 @@ class LoQTModel(nn.Module):
         only_train_lora=False,
         model_config=None,
         use_eigenh_for_projection=False,
+        init_lora_AB_as_random_and_zeros=False,
+        train_projection_matrix=False
     ):
         if r <= 0:
             raise ValueError("r must be positive. If you want r == 0, use the original model.")
@@ -72,6 +76,8 @@ class LoQTModel(nn.Module):
         self.only_train_lora = only_train_lora
         self.model_config = model_config
         self.use_eigenh_for_projection = use_eigenh_for_projection
+        self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
+        self.train_projection_matrix = train_projection_matrix
 
         # Initialize the configuration with the given parameters
         self._config = LoQT_Config(
@@ -89,6 +95,8 @@ class LoQTModel(nn.Module):
             is_single_gpu = is_single_gpu,
             only_train_lora = only_train_lora,
             use_eigenh_for_projection=use_eigenh_for_projection,
+            init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
+            train_projection_matrix=train_projection_matrix
         )
 
         target_modules_list = target_modules
@@ -117,7 +125,9 @@ class LoQTModel(nn.Module):
                 compensate_quant_error_iterations = compensate_quant_error_iterations,
                 use_offloading = self.use_offloading,
                 is_single_gpu=is_single_gpu,
-                use_eigenh_for_projection=use_eigenh_for_projection
+                use_eigenh_for_projection=use_eigenh_for_projection,
+                init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
+                train_projection_matrix=train_projection_matrix,
             )
 
             del module
@@ -165,10 +175,10 @@ class LoQTModel(nn.Module):
             if isinstance(module, LoraLinear):
                 module.lora_zero_init()
 
-    def init_LoRA_with_gradient_projections(self):
+    def reinitialize_LoRA_AB_after_merge(self):
         for module in self.modules():
             if isinstance(module, LoraLinear):
-                module.init_LoRA_with_gradient_projections()
+                module.reinitialize_LoRA_AB_after_merge()
                 
     def quantize_all_lora_linear_layers(self):
         for module in self.modules():
@@ -197,7 +207,7 @@ class LoQTModel(nn.Module):
         if save_original_model:
             model_to_save = self.return_original_model()
             torch.save(model_to_save, os.path.join(path, "original_model.pth"))
-        torch.save(self, os.path.join(path, "loqt_model.pth"))
+        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
@@ -208,9 +218,10 @@ class LoQTModel(nn.Module):
     @classmethod
     def from_pretrained(cls, path, device, saved_as_full_model=False):
         if saved_as_full_model:
-            return torch.load(os.path.join(path, "original_model.pth"), map_location=device)
+            model2 = torch.load(os.path.join(path, "original_model.pth"), map_location=device)
         else:
-            return torch.load(os.path.join(path, "loqt_model.pth"), map_location=device)
+            model2 = torch.load(os.path.join(path, "pytorch_model_full.pth"), map_location=device)
+        return model2
     
     def return_original_model(self):
         # Create a deep copy of the wrapped model on CPU to avoid modifying the original model
@@ -327,6 +338,8 @@ class LoraLinear(nn.Module):
             use_offloading=False,
             is_single_gpu=False,
             use_eigenh_for_projection=False,
+            init_lora_AB_as_random_and_zeros=False,
+            train_projection_matrix=False
         ):
         super().__init__()
         assert isinstance(W, nn.Linear)
@@ -341,6 +354,8 @@ class LoraLinear(nn.Module):
         self.in_features = W.in_features
         self.out_features = W.out_features
         self.use_offloading = use_offloading
+        self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
+        self.train_projection_matrix = train_projection_matrix
         self.offload_device = 'cpu' if use_offloading else self.device
         self.W = self.maybe_quantize(W, quantize_w, use_double_quant, bnb_4bit_quant) 
         self.set_W_requires_grad(False)
@@ -365,6 +380,11 @@ class LoraLinear(nn.Module):
             raise ValueError("W must be an instance of nn.Linear")
         if proj_type not in ['std', 'left', 'right', ]:
             raise ValueError("proj_type must be 'std', 'left',or 'right'")
+        # Quantize_projection_matrix and train_projection_matrix should not both be True
+        if self.quantize_projection_matrix and self.train_projection_matrix:
+            raise ValueError("quantize_projection_matrix and train_projection_matrix cannot both be True")
+        if self.init_lora_AB_as_random_and_zeros and not self.train_projection_matrix:
+            raise ValueError("init_lora_AB_as_random_and_zeros can only be True when train_projection_matrix is True")
 
     
     def determine_projection_type(self, W, proj_type):
@@ -399,7 +419,12 @@ class LoraLinear(nn.Module):
             raise ValueError("quantize must be None, or '4bit'")
                 
     def set_LoRA_requires_grad(self, flag):
-        if flag:
+        if self.train_projection_matrix and flag:
+            # set both A and B to requires_grad
+            self.lora_A.weight.requires_grad = flag
+            self.lora_B.weight.requires_grad = flag
+            self.lora_params_disabled = False
+        elif flag:
             # Set requires_grad for LoRA layers based on the projection type
             if self.proj_type == 'left': 
                 self.lora_A.weight.requires_grad = False
@@ -582,7 +607,20 @@ class LoraLinear(nn.Module):
         if self.W.bias is not None:
             self.W.bias.requires_grad = True
     
-        
+    def reinitialize_LoRA_AB_after_merge(self):
+        if self.init_lora_AB_as_random_and_zeros:
+            self.initialize_LoRA_AB_random_and_zero()
+        else:
+            self.init_LoRA_with_gradient_projections()
+            
+    def initialize_LoRA_AB_random_and_zero(self):
+        if self.proj_type == 'left':
+            self.lora_A.weight.data = torch.randn(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
+            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+        else:
+            self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
+            self.lora_B.weight.data = torch.randn(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+    
     def init_LoRA_with_gradient_projections(self):
         #Either it is a linear layer and has requires_grad or it is a quantized (bnb) layer and has require_grad_W
         self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
