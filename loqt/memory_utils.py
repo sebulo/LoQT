@@ -73,11 +73,11 @@ def log_memory_usage(model, optimizer, scheduler_dict, args, logger):
         if args.use_loqt and args.optimizer.lower() not in ["adamw8bit_per_layer"]:
             return LoQTModel.model_memory_usage_in_MB(model, include_quant_state=include_quant_state)
         elif args.optimizer.lower() in ["galore_adamw", "galore_adamw8bit"]:
-            return model_memory_usage_in_MB(model)[0]  # Only the model memory usage
+            return model_memory_usage_in_MB(model)  # Only the model memory usage
         elif args.optimizer.lower() in ["adamw8bit_per_layer", "galore_adamw8bit_per_layer"]:
-            return model_memory_usage_in_MB(model)[0]  # Only the model memory usage
+            return model_memory_usage_in_MB(model)  # Only the model memory usage
         elif args.optimizer.lower() in ['adamw', 'adam']:
-            return model_memory_usage_in_MB(model)[0]  # Only the model memory usage
+            return model_memory_usage_in_MB(model)  # Only the model memory usage
         else:
             raise ValueError("Unsupported optimizer type for memory logging")
 
@@ -88,28 +88,28 @@ def log_memory_usage(model, optimizer, scheduler_dict, args, logger):
         memory_usage_model = get_model_memory_usage(model, include_quant_state=True)
     elif args.optimizer.lower() in ["galore_adamw", "galore_adamw8bit"]:
         memory_usage_optimizer = galore_optim_memory_usage_in_MB(optimizer)
-        memory_usage_model = get_model_memory_usage(model)
-        memory_usage_gradients = 0  # Assuming galore optimizers do not use gradients memory
+        memory_usage_model, memory_usage_gradients = get_model_memory_usage(model)
     elif args.optimizer.lower() in ["adamw8bit_per_layer", "galore_adamw8bit_per_layer"]:
         memory_usage_optimizer = layer_wise_memory_usage_in_MB(optimizer, scheduler_dict)
-        memory_usage_model = get_model_memory_usage(model)
+        memory_usage_model,_ = get_model_memory_usage(model)
         memory_usage_gradients = 0  # Assuming layer-wise optimizers do not use gradients memory
     elif args.optimizer.lower() in ['adamw', 'adam']:
         memory_usage_optimizer, memory_usage_gradients = optimizer_memory_usage_in_MB(optimizer)
-        memory_usage_model = get_model_memory_usage(model)
+        memory_usage_model, _ = get_model_memory_usage(model)
     else:
         raise ValueError("Unsupported optimizer type for memory logging")
     
-    optmizer_and_model_memory = memory_usage_optimizer + memory_usage_model
+    optimizer_and_model_memory = memory_usage_optimizer + memory_usage_model
     
     logger.info(f"Memory usage of model: {memory_usage_model} MB")
     logger.info(f"Memory usage of optimizer: {memory_usage_optimizer} MB")
-    logger.info(f"Memory usage of optimizer and model: {optmizer_and_model_memory} MB")
+    logger.info(f"Memory usage of optimizer and model: {optimizer_and_model_memory} MB")
+    logger.info(f"Memory usage of gradients: {memory_usage_gradients} MB")
     
     memory_usage_dict = {
         "model": memory_usage_model,
-        "optimizer": memory_usage_optimizer,
-        "optimizer_and_model": optmizer_and_model_memory,
+        "optimizer_memory": memory_usage_optimizer,
+        "optimizer_and_model": optimizer_and_model_memory,
         "gradients": memory_usage_gradients
     }
     return memory_usage_dict

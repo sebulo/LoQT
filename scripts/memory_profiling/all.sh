@@ -21,7 +21,8 @@ COMMON_ARGS="--lr 0.01 --galore_scale 0.25 --lora_alpha 0.5 --proj_type std --up
 
 
 # Define model configurations with their corresponding ranks
-declare -a models_and_ranks=("llama_130m:128" "llama_350m:256" "llama_1b:512" "llama_3b:512" "llama_7b:1024" "llama_13b:1024")
+# declare -a models_and_ranks=("llama_130m:128" "llama_350m:256" "llama_1b:512" "llama_3b:512" "llama_7b:1024" "llama_13b:1024")
+declare -a models_and_ranks=("llama_350m:256" )
 
 # Run specific adamW configs with specific ranks
 for model_and_rank in "${models_and_ranks[@]}"; do

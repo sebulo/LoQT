@@ -589,7 +589,6 @@ def main(args):
                 memory_usage_dict = log_memory_usage(get_model(model), optimizer_dict if layer_wise_flag else optimizer, scheduler_dict if layer_wise_flag else scheduler,  args, logger)
                 metrics_to_log.update(memory_usage_dict)
                 logging_counter_memory_usage_dict +=1
-
         loss = model(**batch, labels=labels).loss
 
         scaled_loss = loss / args.gradient_accumulation
