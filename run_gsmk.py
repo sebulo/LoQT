@@ -1,17 +1,3 @@
-# coding=utf-8
-# Copyright 2021 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """ Finetuning a 🤗 Transformers model for sequence classification on GLUE."""
 import argparse
 import json
@@ -32,8 +18,19 @@ from huggingface_hub import Repository, create_repo
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from loqt.utils import get_proj_update_steps, filter_linear_target_modules
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel, LoraConfig, TaskType, get_peft_model
 
+# Modified from https://github.com/tatsu-lab/stanford_alpaca/blob/main/train.py
+
+import copy
+import logging
+import os
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Sequence
+
+import torch
+import transformers
+from torch.utils.data import Dataset
 
 
 import transformers
@@ -293,11 +290,191 @@ def parse_args():
     return args
 
 
+IGNORE_INDEX = -100
+DEFAULT_PAD_TOKEN = "[PAD]"
+DEFAULT_EOS_TOKEN = "</s>"
+DEFAULT_BOS_TOKEN = "<s>"
+DEFAULT_UNK_TOKEN = "<unk>"
+ANSWER_PROMPT = "The final answer is: "
+QUESTION_PROMPT = "\nAnswer the above question. First think step by step and then answer the final number.\n"
+
+logger = get_logger(__name__)
+
+require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
+
+@dataclass
+class ModelArguments:
+    model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the model."},
+    )
+    adapter_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the LoRA adapter. Used in evaluation or resuming from the checkpoint."},
+    )
+    lora_init: bool = field(
+        default=False,
+        metadata={"help": "True: Use zero and gaussian initialization; False: Load adapters from LoftQ in HF hub."},
+    )
+    full_precision:  bool = field(
+        default=False,
+        metadata={"help": "False: Use bitsandbytes Linear4bit, real quantization"
+                          "True: Use quantization equivalent fp16/fp32 weights."
+                  },
+    )
+    rank: int = field(
+        default=64,
+        metadata={"help": "Rank of LoRA adapters. LoftQ does not require this config. Used for fp16 LoRA or QLoRA."},
+    )
+    lora_alpha: int = field(
+        default=16,
+        metadata={"help": "LoftQ does not require this config. Used for QLoRA."},
+    )
+    token: Optional[str] = field(
+        default=None,
+        metadata={"help": "HF token to access to private models, e.g., meta-llama"},
+    )
+    attn_implementation: str = field(
+        default="sdpa",
+        metadata={"help": "Choose from [eager, sdpa, flash_attention_2]"},
+    )
+
+@dataclass
+class DataArguments:
+    data_name: str = field(
+        default="gsm8k",
+        metadata={"help": "Dataset name."}
+    )
+
+def set_seed_torch(seed: int):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def smart_tokenizer_and_embedding_resize(
+    special_tokens_dict: Dict,
+    tokenizer: AutoTokenizer,
+    model: AutoModelForCausalLM,
+):
+    """Resize tokenizer and embedding."""
+    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+    model.resize_token_embeddings(len(tokenizer))
+
+    if num_new_tokens > 0:
+        input_embeddings = model.get_input_embeddings().weight.data
+        output_embeddings = model.get_output_embeddings().weight.data
+
+        input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+        output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+        input_embeddings[-num_new_tokens:] = input_embeddings_avg
+        output_embeddings[-num_new_tokens:] = output_embeddings_avg
+
+def _tokenize_fn(strings: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
+    """Tokenize a list of strings."""
+    tokenized_list = [
+        tokenizer(
+            text,
+            return_tensors="pt",
+            padding="longest",
+            max_length=tokenizer.model_max_length,
+            truncation=True,
+        )
+        for text in strings
+    ]
+    input_ids = labels = [tokenized.input_ids[0] for tokenized in tokenized_list]
+    input_ids_lens = labels_lens = [
+        tokenized.input_ids.ne(tokenizer.pad_token_id).sum().item() for tokenized in tokenized_list
+    ]
+    return dict(
+        input_ids=input_ids,
+        labels=labels,
+        input_ids_lens=input_ids_lens,
+        labels_lens=labels_lens,
+    )
+
+def preprocess(sources: Sequence[str], targets: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
+    """Preprocess the data by tokenizing."""
+    # sources are questions, and targets are answers
+    examples = [s + t for s, t in zip(sources, targets)]
+    examples_tokenized, sources_tokenized = [_tokenize_fn(strings, tokenizer) for strings in (examples, sources)]
+    input_ids = examples_tokenized["input_ids"]
+    labels = copy.deepcopy(input_ids)
+    for label, source_len in zip(labels, sources_tokenized["input_ids_lens"]):
+        label[:source_len] = IGNORE_INDEX
+
+    return dict(input_ids=input_ids, labels=labels)
+
+class SupervisedDataset(Dataset):
+    """Dataset for supervised fine-tuning."""
+
+    def __init__(self, raw_data, tokenizer: AutoTokenizer):
+        super(SupervisedDataset, self).__init__()
+
+        logger.warning("Formatting inputs...")
+        sources = [f"{example['question']}{QUESTION_PROMPT}" for example in raw_data]
+        targets = [f"{example['answer']}{tokenizer.eos_token}".replace("####", ANSWER_PROMPT) for example in raw_data]
+
+        logger.warning("Tokenizing inputs... This may take some time...")
+        data_dict = preprocess(sources, targets, tokenizer)
+
+        self.input_ids = data_dict["input_ids"]
+        self.labels = data_dict["labels"]
+
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        return dict(input_ids=self.input_ids[i], labels=self.labels[i])
+
+@dataclass
+class DataCollatorForSupervisedDataset(object):
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: AutoTokenizer
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
+        )
+        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
+        return dict(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+        )
+        
+
+@dataclass
+class TrainingArguments(transformers.TrainingArguments):
+    cache_dir: Optional[str] = field(default=None)
+    optim: str = field(default="adamw_torch")
+    model_max_length: int = field(
+        default=512,
+        metadata={"help": "Maximum sequence length. Sequences will be right padded (and possibly truncated)."},
+    )
+    expt_name: str = field(
+        default="default",
+        metadata={"help": "Experiment name"},
+    )
+
+
+
+def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
+    """Make dataset and collator for supervised fine-tuning."""
+    logger.warning("Downloading Data")
+    dataset = load_dataset(data_args.data_name, "main")
+    train_set = dataset['train']
+    train_dataset = SupervisedDataset(raw_data=train_set, tokenizer=tokenizer)
+    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
+
 def main():
     args = parse_args()
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    send_example_telemetry("loqt_benchmark_GLUE_final", args)
+    send_example_telemetry("loqt_benchmark_gsmk", args)
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
@@ -351,276 +528,123 @@ def main():
         elif args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
     accelerator.wait_for_everyone()
+        
     
-    
-    
-    # Get the datasets: you can either provide your own CSV/JSON training and evaluation files (see below)
-    # or specify a GLUE benchmark task (the dataset will be downloaded automatically from the datasets Hub).
+    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
+    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # For CSV/JSON files, this script will use as labels the column called 'label' and as pair of sentences the
-    # sentences in columns called 'sentence1' and 'sentence2' if such column exists or the first two columns not named
-    # label if at least two columns are provided.
-
-    # If the CSVs/JSONs contain only one non-label column, the script does single sentence classification on this
-    # single column. You can easily tweak this behavior (see below)
-
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
-    if args.task_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset("glue", args.task_name)
+    if model_args.full_precision:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            low_cpu_mem_usage=True,
+            torch_dtype=torch.bfloat16,
+            token=model_args.token,
+        )
     else:
-        # Loading the dataset from local csv or json file.
-        data_files = {}
-        if args.train_file is not None:
-            data_files["train"] = args.train_file
-        if args.validation_file is not None:
-            data_files["validation"] = args.validation_file
-        extension = (args.train_file if args.train_file is not None else args.validation_file).split(".")[-1]
-        raw_datasets = load_dataset(extension, data_files=data_files)
-    # See more about loading any type of standard or custom dataset at
-    # https://huggingface.co/docs/datasets/loading_datasets.
-
-    # Labels
-    if args.task_name is not None:
-        is_regression = args.task_name == "stsb"
-        if not is_regression:
-            label_list = raw_datasets["train"].features["label"].names
-            num_labels = len(label_list)
-        else:
-            num_labels = 1
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            low_cpu_mem_usage=True,
+            torch_dtype=torch.bfloat16,
+            token=model_args.token,
+            quantization_config=transformers.BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=False,
+                bnb_4bit_quant_type='nf4',
+            ),
+        )
+    
+    task_type = TaskType.CAUSAL_LM
+    if any(name in model_args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon"]):
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+    elif any(name in model_args.model_name_or_path.lower() for name in ["phi"]):
+        target_modules = ["q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"]
     else:
-        # Trying to have good defaults here, don't hesitate to tweak to your needs.
-        is_regression = raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
-        if is_regression:
-            num_labels = 1
-        else:
-            # A useful fast method:
-            # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.unique
-            label_list = raw_datasets["train"].unique("label")
-            label_list.sort()  # Let's sort it for determinism
-            num_labels = len(label_list)
-            
-    
-    
-    
-    # Load pretrained model and tokenizer
-    #
-    # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
-    # download model & vocab.
-
-    if not args.eval_llama:
-        config = AutoConfig.from_pretrained(
-            args.model_name_or_path,
-            num_labels=num_labels,
-            finetuning_task=args.task_name,
-            trust_remote_code=args.trust_remote_code,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.model_name_or_path, use_fast=not args.use_slow_tokenizer, trust_remote_code=args.trust_remote_code
-        )
-        model = AutoModelForSequenceClassification.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            ignore_mismatched_sizes=args.ignore_mismatched_sizes,
-            trust_remote_code=args.trust_remote_code,
-        )
-    elif 'deberta' in args.model_name_or_path:
-        config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
-        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=not args.use_slow_tokenizer)
-        model = AutoModelForSequenceClassification.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            ignore_mismatched_sizes=args.ignore_mismatched_sizes, 
-            )
-
-    else:
-        config = AutoConfig.from_pretrained(args.model_name_or_path)
-        setattr(config, 'num_labels', num_labels)
-        setattr(config, 'finetuning_task', args.task_name)
-        tokenizer = AutoTokenizer.from_pretrained("t5-base", model_max_length=args.max_length)
-        tokenizer.padding_side = "left"
-        model = LlamaForSequenceClassification(
-            config
-        )
-        
-    ## load pretrained model
-    if args.load_pretrained_model:
-        logger.info("*" * 40)
-        logger.info(f"Loading model from {args.load_pretrained_model}")
-        checkpoint_path = os.path.join(args.load_pretrained_model, "pytorch_model.bin")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        for key in checkpoint.keys():
-            if key not in model.state_dict().keys():
-                print(f"key {key} not in model state dict")
-        
-        for key in model.state_dict().keys():
-            if key not in checkpoint.keys():
-                print(f"key {key} not in checkpoint")
-        model.load_state_dict(checkpoint, strict=False)
-        logger.info(f"Model successfully loaded (strict=False policy)")
-        logger.info("*" * 40)
-        
-    # get dtypes of model
-    logger.info(f"Model dtype: {model.dtype}")
-    dtype = model.dtype
-    
-    # project modules
-    if 'roberta' in args.model_name_or_path:
-        if args.lora_all_modules:
-            target_modules_list = ["q_proj", "v_proj", "up_proj", "down_proj", "gate_proj", "k_proj", "o_proj"]
-        else:
-            target_modules_list = ["q_proj", "v_proj"]
-    if 'deberta' in args.model_name_or_path:
-        if args.lora_all_modules:
-            target_modules_list = ['query', 'key', 'value',
-                        'q_proj', 'k_proj', 'v_proj',
-                        'query_proj', 'key_proj', 'value_proj',
-                        'out_proj', 'dense', 'attention', 'fc1', 'fc2']
-        else:
-            target_modules_list = ['query_proj', 'key_proj', 'value_proj']
-        
-        
-    # After loading the pre-trained model
+        raise ValueError(f"Only support LLAMA, Mistral, Falcon, Phi-2, but got {model_args.model_name_or_path}.")
     if args.use_loqt:
-        for param in model.parameters():
-            param.requires_grad = False
-        logger.info(f"Wrapping model with LoQT")
-        model = LoQTModel(
-            model, 
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            target_modules=target_modules_list, #TODO in pretraining we use ["attn", "attention", "mlp"],
-            quantize_w=args.quantize_w,
-            use_double_quant=args.use_double_quant, 
-            device=device,
-            proj_type=args.proj_type,
-            compute_dtype=dtype, #compute_dtype= torch.bfloat16 if args.dtype == "bfloat16" else torch.float32,
-            quantize_projection_matrix = args.quantize_projection_matrix,
-            compensate_quant_error_iterations = args.compensate_quant_error_iterations,
-            is_single_gpu= args.single_gpu,
-            only_train_lora=args.only_train_lora,
-        )  
-    elif args.use_regular_lora:
-        target_modules_list = filter_linear_target_modules(model, target_modules_list)
-        
+            for param in model.parameters():
+                param.requires_grad = False
+            model = LoQTModel(
+                model, 
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                target_modules=target_modules, #TODO in pretraining we use ["attn", "attention", "mlp"],
+                quantize_w=args.quantize_w,
+                use_double_quant=args.use_double_quant, 
+                device=device,
+                proj_type=args.proj_type,
+                compute_dtype=dtype, #compute_dtype= torch.bfloat16 if args.dtype == "bfloat16" else torch.float32,
+                quantize_projection_matrix = args.quantize_projection_matrix,
+                compensate_quant_error_iterations = args.compensate_quant_error_iterations,
+                is_single_gpu= args.single_gpu,
+                only_train_lora=args.only_train_lora,
+            )  
+    elif model_args.lora_init:
         lora_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            init_lora_weights=args.init_lora_weights,
-            target_modules=target_modules_list,
-            bias="none",
-            task_type="CAUSAL_LM",  # or "SEQUENCE_CLASSIFICATION" if that's the correct task type
+            task_type=task_type,
+            inference_mode=False,
+            r=model_args.rank,
+            lora_alpha=model_args.lora_alpha,
+            lora_dropout=0.1,
+            target_modules=target_modules,
+            init_lora_weights=True,
         )
         model = get_peft_model(model, lora_config)
-        logger.info("Model wrapped with regular LoRA")
-        show_model_stats_deberta(model, mark_only_lora_as_trainable=True)
+    elif model_args.adapter_name_or_path is not None:
+        model = PeftModel.from_pretrained(
+            model,
+            model_args.adapter_name_or_path,
+            is_trainable=True,
+            token=model_args.token,
+        )
         
-    
-    if 'deberta' in args.model_name_or_path:  
-        if not args.use_loqt:
-            # no wrapped model
-            model.classifier.weight.requires_grad = True
-            model.classifier.bias.requires_grad = True
-        else:
-            model.wrapped_model.classifier.weight.requires_grad = True
-            model.wrapped_model.classifier.bias.requires_grad = True
-    
-    # Preprocessing the datasets
-    if args.task_name is not None:
-        sentence1_key, sentence2_key = task_to_keys[args.task_name]
     else:
-        # Again, we try to have some nice defaults but don't hesitate to tweak to your use case.
-        non_label_column_names = [name for name in raw_datasets["train"].column_names if name != "label"]
-        if "sentence1" in non_label_column_names and "sentence2" in non_label_column_names:
-            sentence1_key, sentence2_key = "sentence1", "sentence2"
-        else:
-            if len(non_label_column_names) >= 2:
-                sentence1_key, sentence2_key = non_label_column_names[:2]
-            else:
-                sentence1_key, sentence2_key = non_label_column_names[0], None
-
-    # Get the configuration from the correct model reference
-    config = get_model_config(model)
-
-    # Some models have set the order of the labels to use, so let's make sure we do use it.
-    label_to_id = None
-    if args.task_name is not None and not is_regression:
-        # Some have all caps in their config, some don't.
-        label_name_to_id = {k.lower(): v for k, v in config.label2id.items()}
-        if sorted(label_name_to_id.keys()) == sorted(label_list):
-            logger.info(
-                f"The configuration of the model provided the following label correspondence: {label_name_to_id}. "
-                "Using it!"
-            )
-            label_to_id = {i: label_name_to_id[label_list[i]] for i in range(num_labels)}
-        else:
-            logger.warning(
-                "Your model seems to have been trained with labels, but they don't match the dataset: ",
-                f"model labels: {sorted(label_name_to_id.keys())}, dataset labels: {sorted(label_list)}."
-                "\nIgnoring the model labels as a result.",
-            )
-    elif args.task_name is None and not is_regression:
-        label_to_id = {v: i for i, v in enumerate(label_list)}
-
-    if label_to_id is not None:
-        set_model_labels(model, label_to_id, {id: label for label, id in label_to_id.items()})
-    elif args.task_name is not None and not is_regression:
-        new_label_to_id = {l: i for i, l in enumerate(label_list)}
-        set_model_labels(model, new_label_to_id, {id: label for label, id in new_label_to_id.items()})
-
-    padding = "max_length" if args.pad_to_max_length else False
-    def preprocess_function(examples):
-        # Tokenize the texts
-        texts = (
-            (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
-        )
-        result = tokenizer(*texts, padding=padding, max_length=args.max_length, truncation=True)
-
-        if "label" in examples:
-            if label_to_id is not None:
-                # Map labels to IDs (not necessary for GLUE tasks)
-                result["labels"] = [label_to_id[l] for l in examples["label"]]
-            else:
-                # In all cases, rename the column to labels because the model will expect that.
-                result["labels"] = examples["label"]
-        return result
-
-    with accelerator.main_process_first():
-        processed_datasets = raw_datasets.map(
-            preprocess_function,
-            batched=True,
-            remove_columns=raw_datasets["train"].column_names,
-            desc="Running tokenizer on dataset",
+        model = PeftModel.from_pretrained(
+            model,
+            model_args.model_name_or_path,
+            subfolder='loftq_init',
+            is_trainable=True,
+            token=model_args.token,
         )
 
-    train_dataset = processed_datasets["train"]
-    eval_dataset = processed_datasets["validation_matched" if args.task_name == "mnli" else "validation"]
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path,
+        token=model_args.token,
+        cache_dir=training_args.cache_dir,
+        model_max_length=training_args.model_max_length,
+        padding_side="right",
+        use_fast=False,
+    )
+    special_tokens_dict = dict()
+    if tokenizer.pad_token is None:
+        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+    if tokenizer.eos_token is None:
+        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    if tokenizer.bos_token is None:
+        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    if tokenizer.unk_token is None:
+        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
 
+    smart_tokenizer_and_embedding_resize(
+        special_tokens_dict=special_tokens_dict,
+        tokenizer=tokenizer,
+        model=model,
+    )
+
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    train_dataset = data_module['train_dataset']
+    data_collator = data_module['data_collator']
+    
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
-    if args.pad_to_max_length:
-        # If padding was already done ot max length, we use the default data collator that will just convert everything
-        # to tensors.
-        data_collator = default_data_collator
-    else:
-        # Otherwise, `DataCollatorWithPadding` will apply dynamic padding for us (by padding to the maximum length of
-        # the samples passed). When using mixed precision, we add `pad_to_multiple_of=8` to pad all tensors to multiple
-        # of 8s, which will enable the use of Tensor Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
-        data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=(8 if accelerator.use_fp16 else None))
-
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
     )
-    eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
     # Optimizer
-    # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
     if args.use_loqt or args.use_regular_lora:
         params1 = [p for n, p in model.named_parameters() if p.requires_grad and not any(nd in n for nd in no_decay)]
@@ -641,6 +665,17 @@ def main():
     print('init lr: ', args.learning_rate)
     
     
+    ## TODO Deberta specifc - what to do for other models
+    # if 'deberta' in args.model_name_or_path:  
+    #     if not args.use_loqt:
+    #         # no wrapped model
+    #         model.classifier.weight.requires_grad = True
+    #         model.classifier.bias.requires_grad = True
+    #     else:
+    #         model.wrapped_model.classifier.weight.requires_grad = True
+    #         model.wrapped_model.classifier.bias.requires_grad = True
+
+    
     # math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -652,6 +687,9 @@ def main():
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
     
+    
+    
+    ##### SETTING UP OPTIMIZER #####
     if not args.enable_galore:
         optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
     else:
@@ -661,7 +699,7 @@ def main():
             if not isinstance(module, nn.Linear):
                 continue
 
-            if not any(target_key in module_name for target_key in target_modules_list):
+            if not any(target_key in module_name for target_key in target_modules):
                 continue
 
             print('enable GaLore for weights in module: ', module_name)
@@ -676,6 +714,7 @@ def main():
         optimizer = GaLoreAdamW(param_groups, lr=args.learning_rate)
     
 
+    ##### TRAINABLE PARAMS #####
     # check number of trainable params in optimizer
     num_trainable_params = 0
     for group in optimizer.param_groups:
@@ -684,14 +723,16 @@ def main():
     print('num_trainable_params in optimizer: ', num_trainable_params)
     
 
-    # Scheduler 
+    ##### SCHEDULER #####
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
         optimizer=optimizer,
         num_warmup_steps=args.num_warmup_steps,
         num_training_steps=args.max_train_steps,
     )
-
+    
+    
+    ##### TRACKING #####
     # Prepare everything with our `accelerator`.
     model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
@@ -715,14 +756,13 @@ def main():
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
         experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
-        accelerator.init_trackers("loqt_benchmark_GLUE_final", experiment_config)
+        accelerator.init_trackers("loqt_benchmark_GSMK", experiment_config)
 
-    # Get the metric function
-    if args.task_name is not None:
-        metric = evaluate.load("glue", args.task_name)
-    else:
-        metric = evaluate.load("accuracy")
-
+        
+    ##########################################################################################
+    ##########################################################################################
+    ##########################################################################################
+    ##########################################################################################
     # Train!
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
@@ -738,12 +778,8 @@ def main():
     completed_steps = 0
     starting_epoch = 0
     best_eval_loss = float('inf')  # Initialize with infinity, assuming lower is better
-    best_eval_metric1 = float('-inf')  # Initialize to the worst possible value for maximization
-    best_eval_metric2 = float('-inf')  # Initialize only if needed
-    current_metric1 = 0
-    # Assuming args.task_name contains the current task name
-    metrics_names = task_metrics[args.task_name]  # Corrected to access dictionary values
-
+    best_eval_metric = float('-inf')  # Initialize to the worst possible value for maximization
+    current_metric = 0
 
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
@@ -776,11 +812,10 @@ def main():
 
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
-    
+
     for epoch in range(starting_epoch, args.num_train_epochs):
-        
         logger.info(f"***** Epoch {epoch} *****")
-        
+
         model.train()
         if args.with_tracking:
             total_loss = 0
@@ -803,15 +838,12 @@ def main():
                 model.merge()
                 optimizer.zero_grad()
                 model.set_W_requires_grad(True)
-                
                 model.set_LoRA_requires_grad(True)
                 model.disable_lora(False)
                 model.lora_zero_init()
                 
             outputs = model(**batch)
-            #logger.info(f"outputs: {outputs}")
             loss = outputs.loss
-            # We keep track of the loss at each epoch
             if args.with_tracking:
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
@@ -823,13 +855,6 @@ def main():
                 model.set_LoRA_requires_grad(True)
                 model.disable_lora(False)
                 print('num_trainable_params: ', sum(p.numel() for p in model.parameters() if p.requires_grad))
-                if 'deberta' in args.model_name_or_path:  
-                    if not args.use_loqt:
-                        model.classifier.weight.requires_grad = True
-                        model.classifier.bias.requires_grad = True
-                    else:
-                        model.wrapped_model.classifier.weight.requires_grad = True
-                        model.wrapped_model.classifier.bias.requires_grad = True
             elif step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()
@@ -837,166 +862,52 @@ def main():
             progress_bar.update(1)
             completed_steps += 1
 
-            if isinstance(checkpointing_steps, int):
-                if completed_steps % checkpointing_steps == 0:
-                    output_dir = f"step_{completed_steps}"
-                    if args.output_dir is not None:
-                        output_dir = os.path.join(args.output_dir, output_dir)
-                    accelerator.save_state(output_dir)
+            if isinstance(checkpointing_steps, int) and completed_steps % checkpointing_steps == 0:
+                output_dir = f"step_{completed_steps}"
+                if args.output_dir:
+                    output_dir = os.path.join(args.output_dir, output_dir)
+                accelerator.save_state(output_dir)
 
             if completed_steps >= args.max_train_steps:
                 break
             
-            # log loss
             logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
 
-
-        model.eval()
-        samples_seen = 0
-        total_eval_loss = 0
-        eval_steps = 0
-        
-        
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                outputs = model(**batch)
-                
-            loss = outputs.loss.item()
-            total_eval_loss += loss
-            eval_steps += 1
-            
-            predictions = outputs.logits.argmax(dim=-1) if not is_regression else outputs.logits.squeeze()
-            predictions, references = accelerator.gather((predictions, batch["labels"]))
-            # If we are in a multiprocess environment, the last batch has duplicates
-            if accelerator.num_processes > 1:
-                if step == len(eval_dataloader) - 1:
-                    predictions = predictions[: len(eval_dataloader.dataset) - samples_seen]
-                    references = references[: len(eval_dataloader.dataset) - samples_seen]
-                else:
-                    samples_seen += references.shape[0]
-            metric.add_batch(
-                predictions=predictions,
-                references=references,
-            )
-            
-        
-
-        eval_metric = metric.compute()
-        average_eval_loss = total_eval_loss / eval_steps
-        logger.info(f"Epoch {epoch}: {eval_metric}, Eval Loss: {average_eval_loss}")
-
-        # Initialize current metrics
-        current_metric1 = eval_metric.get(metrics_names[0], float('-inf'))
-        current_metric2 = None
-
-        # Check if the current model is the best based on evaluation loss
-        if average_eval_loss < best_eval_loss:
-            best_eval_loss = average_eval_loss
-            logger.info(f"New best model found at epoch {epoch} with eval loss {average_eval_loss}")
-
-        # Log and track best metrics as per task requirements
-        if metrics_names[0] in eval_metric:
-            current_metric1 = eval_metric[metrics_names[0]]
-            if current_metric1 > best_eval_metric1:
-                best_eval_metric1 = current_metric1
-                logger.info(f"New best model found at epoch {epoch} with {metrics_names[0]} {current_metric1}")
-        else:
-            logger.warning(f"{metrics_names[0]} key not found in eval metrics.")
-
-        # If there is a second metric to track
-        if len(metrics_names) > 1 and metrics_names[1] in eval_metric:
-            current_metric2 = eval_metric[metrics_names[1]]
-            if current_metric2 > best_eval_metric2:
-                best_eval_metric2 = current_metric2
-                logger.info(f"New best model found at epoch {epoch} with {metrics_names[1]} {current_metric2}")
-
-        # Log metrics using wandb or another tracker if with_tracking is enabled
         if args.with_tracking:
             log_data = {
-                "train_loss": total_loss / len(train_dataloader),  # Assuming total_loss is tracked during training
-                "eval_loss": average_eval_loss,
-                "best_eval_loss": best_eval_loss,
-                metrics_names[0]: current_metric1,
-                "best_" + metrics_names[0]: best_eval_metric1,
-                "epoch": epoch
+                "train_loss": total_loss / len(train_dataloader),
+                "epoch": epoch,
             }
-
-            # Include second metric if it exists and is defined
-            if len(metrics_names) > 1 and current_metric2 is not None:
-                log_data[metrics_names[1]] = current_metric2
-                log_data["best_" + metrics_names[1]] = best_eval_metric2
-
             accelerator.log(log_data, step=completed_steps)
-
-            
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
-            accelerator.wait_for_everyone()
-            # Unwrap the model for saving if not using LoQT; use custom save if LoQT is used
-            if not args.use_loqt:
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(
-                    args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-                )
-            else:
-                # Use your custom save function for LoQT
-                model.save_pretrained(args.output_dir)
-                
-            if accelerator.is_main_process:
-                tokenizer.save_pretrained(args.output_dir)
-                repo.push_to_hub(
-                    commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
-                )
-
+        
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-
     if args.with_tracking:
         accelerator.end_training()
 
-    if args.output_dir is not None:
+    if args.output_dir:
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
         if not args.use_loqt:
-            unwrapped_model.save_pretrained(
-                args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-            )
+            unwrapped_model.save_pretrained(args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save)
         else:
-            # Use your custom save function for LoQT
             model.save_pretrained(args.output_dir)
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:
                 repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
 
-    if args.task_name == "mnli":
-        # Final evaluation on mismatched validation set
-        eval_dataset = processed_datasets["validation_mismatched"]
-        eval_dataloader = DataLoader(
-            eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size
-        )
-        eval_dataloader = accelerator.prepare(eval_dataloader)
+        
+    ##########################################################################################
+    ##########################################################################################
+    ##########################################################################################
+    ##########################################################################################
 
-        model.eval()
-        for step, batch in enumerate(eval_dataloader):
-            outputs = model(**batch)
-            predictions = outputs.logits.argmax(dim=-1)
-            metric.add_batch(
-                predictions=accelerator.gather(predictions),
-                references=accelerator.gather(batch["labels"]),
-            )
-
-        eval_metric = metric.compute()
-        logger.info(f"mnli-mm: {eval_metric}")
-
-    if args.output_dir is not None:
-        all_results = {f"eval_{k}": v for k, v in eval_metric.items()}
-        with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
-            json.dump(all_results, f)
-
+    
 # Helper function to get model configuration
 def get_model_config(model):
     if hasattr(model, 'wrapped_model'):
