@@ -145,6 +145,7 @@ class LoQTModel(nn.Module):
         return parent
     
     def set_W_requires_grad(self, requires_grad: bool):
+        breakpoint()
         if self.only_train_lora:
             for module in self.modules():
                 for param in module.parameters():
@@ -642,6 +643,7 @@ class LoraLinear(nn.Module):
                 dist.barrier()
             W_grad = self.W.weight.grad.T #Weight is stored as transpose in nn.linear
             
+        breakpoint()
         assert not torch.all(W_grad == 0), "Gradient of W is zero"
 
         # Compute the projection matrices using the unified function

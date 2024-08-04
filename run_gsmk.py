@@ -104,7 +104,7 @@ def parse_args():
         type=str,
         default=None,
         help="The name of the glue task to train on.",
-        choices=list(task_to_keys.keys()),
+        choices=["cola", "mnli", "mrpc", "qnli", "qqp", "rte", "sst2", "stsb", "wnli", "gsmk"],
     )
     parser.add_argument(
         "--train_file", type=str, default=None, help="A csv or a json file containing the training data."
@@ -229,65 +229,33 @@ def parse_args():
         help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
     )
     
-    # support enable_galore
+    # Additional arguments for LoQT, LoRA, etc.
     parser.add_argument("--enable_galore", action="store_true", help="Whether or not to use low rank optimizer.")
-    # update_proj_gap
     parser.add_argument("--update_proj_gap", type=int, default=50)
-    # galore_scale
     parser.add_argument("--galore_scale", type=float, default=1.0)
-    # proj_type
     parser.add_argument("--proj_type", type=str, default="std")
-    # lora_all_modules
     parser.add_argument("--lora_all_modules", default=True, type=lambda x: x.lower() == "true")
-    # eval_llama
     parser.add_argument("--eval_llama", action="store_true", help="Whether or not to evaluate llama model.")
-    # low_rank_method
     parser.add_argument("--low_rank_method", type=str, default=None, help="low rank method for wandb sweep")
-    
-    # LoQT args
     parser.add_argument("--use_loqt", default=False, type=lambda x: x.lower() == "true", help="Enable LoQT")
     parser.add_argument("--lora_alpha", type=float, default=1.0, help="LoRA alpha value")
-    parser.add_argument("--only_train_lora", default=True, type=lambda x: x.lower() == "true", help="Train only LoRA layers")
+    parser.add_argument("--only_train_lora", default=False, type=lambda x: x.lower() == "true", help="Train only LoRA layers")
     parser.add_argument("--use_eigenh_for_projection", default=False, type=lambda x: x.lower() == "true", help="Use EigenH for projection, if false use SVD")
     parser.add_argument('--use_offloading', default=False, type=lambda x: x.lower() == "true", help="Enable offloading")
-    
-    # Quantization Parameters
     parser.add_argument("--quantize_w", type=str, default=None, choices=["1bit", "4bit", "8bit"], help="Quantization level for weights")
     parser.add_argument("--use_double_quant", default=False, type=lambda x: x.lower() == "true", help="Enable double quantization")
     parser.add_argument("--bnb_4bit_quant_type", type=str, default="nf4", choices=["nf4", "fp4"], help="4-bit quantization type")
     parser.add_argument('--quantize_projection_matrix', default=None, type=str, help='4bit for 4bit quantization of projection matrix')
-
     parser.add_argument('--compensate_quant_error_iterations', type=int, default=0, help='Number of iterations to run the joint optimization of LoRA/quant')
     parser.add_argument('--proj_gap_progression', type=str, default="static", choices=["static", "linear", "exponential"], help="Projection gap progression strategy")
     parser.add_argument('--increment_size', type=float, default=1.2, help="Factor for increasing warmup steps either linear steps or exponential factor")
     parser.add_argument('--max_proj_gap', type=float, default=0, help="Maximum projection gap")
-
     # General Training Parameters
     parser.add_argument("--single_gpu", default=False, action="store_true", help="flag for LoQT to use distributed or not")
     parser.add_argument("--dtype", type=str, default="bfloat16" if torch.cuda.is_bf16_supported() else "float32", help="Data type for training")
 
-    # Regular LoRA Parameter
-    parser.add_argument("--init_lora_weights", type=str, default="gaussian", help="Initialization strategy for LoRA weights")
-    parser.add_argument("--use_regular_lora", action="store_true", help="Use regular LoRA")
-
     
-    args = parser.parse_args()
-    
-    # Sanity checks
-    if args.task_name is None and args.train_file is None and args.validation_file is None:
-        raise ValueError("Need either a task name or a training/validation file.")
-    else:
-        if args.train_file is not None:
-            extension = args.train_file.split(".")[-1]
-            assert extension in ["csv", "json"], "`train_file` should be a csv or a json file."
-        if args.validation_file is not None:
-            extension = args.validation_file.split(".")[-1]
-            assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
-
-    if args.push_to_hub:
-        assert args.output_dir is not None, "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
-
-    return args
+    return parser.parse_args()
 
 
 IGNORE_INDEX = -100
@@ -302,42 +270,6 @@ logger = get_logger(__name__)
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 
-@dataclass
-class ModelArguments:
-    model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={"help": "Path to the model."},
-    )
-    adapter_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={"help": "Path to the LoRA adapter. Used in evaluation or resuming from the checkpoint."},
-    )
-    lora_init: bool = field(
-        default=False,
-        metadata={"help": "True: Use zero and gaussian initialization; False: Load adapters from LoftQ in HF hub."},
-    )
-    full_precision:  bool = field(
-        default=False,
-        metadata={"help": "False: Use bitsandbytes Linear4bit, real quantization"
-                          "True: Use quantization equivalent fp16/fp32 weights."
-                  },
-    )
-    rank: int = field(
-        default=64,
-        metadata={"help": "Rank of LoRA adapters. LoftQ does not require this config. Used for fp16 LoRA or QLoRA."},
-    )
-    lora_alpha: int = field(
-        default=16,
-        metadata={"help": "LoftQ does not require this config. Used for QLoRA."},
-    )
-    token: Optional[str] = field(
-        default=None,
-        metadata={"help": "HF token to access to private models, e.g., meta-llama"},
-    )
-    attn_implementation: str = field(
-        default="sdpa",
-        metadata={"help": "Choose from [eager, sdpa, flash_attention_2]"},
-    )
 
 @dataclass
 class DataArguments:
@@ -351,18 +283,15 @@ def set_seed_torch(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def smart_tokenizer_and_embedding_resize(
-    special_tokens_dict: Dict,
-    tokenizer: AutoTokenizer,
-    model: AutoModelForCausalLM,
-):
+def smart_tokenizer_and_embedding_resize(special_tokens_dict, tokenizer, model):
     """Resize tokenizer and embedding."""
     num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
-    model.resize_token_embeddings(len(tokenizer))
+    model_to_resize = model.wrapped_model if hasattr(model, "wrapped_model") else model
+    model_to_resize.resize_token_embeddings(len(tokenizer))
 
     if num_new_tokens > 0:
-        input_embeddings = model.get_input_embeddings().weight.data
-        output_embeddings = model.get_output_embeddings().weight.data
+        input_embeddings = model_to_resize.get_input_embeddings().weight.data
+        output_embeddings = model_to_resize.get_output_embeddings().weight.data
 
         input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
         output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
@@ -370,7 +299,22 @@ def smart_tokenizer_and_embedding_resize(
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
-def _tokenize_fn(strings: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
+        
+
+def preprocess(sources: Sequence[str], targets: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
+    """Preprocess the data by tokenizing."""
+    # sources are questions, and targets are answers
+    examples = [s + t for s, t in zip(sources, targets)]
+    examples_tokenized, sources_tokenized = [_tokenize_fn(strings, tokenizer) for strings in (examples, sources)]
+    input_ids = examples_tokenized["input_ids"]
+    labels = copy.deepcopy(input_ids)
+    for label, source_len in zip(labels, sources_tokenized["input_ids_lens"]):
+        label[:source_len] = IGNORE_INDEX
+
+    return dict(input_ids=input_ids, labels=labels)    
+
+
+def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
     """Tokenize a list of strings."""
     tokenized_list = [
         tokenizer(
@@ -378,7 +322,7 @@ def _tokenize_fn(strings: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
             return_tensors="pt",
             padding="longest",
             max_length=tokenizer.model_max_length,
-            truncation=True,
+            truncation=True,  # Ensure truncation is applied here
         )
         for text in strings
     ]
@@ -393,18 +337,7 @@ def _tokenize_fn(strings: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
         labels_lens=labels_lens,
     )
 
-def preprocess(sources: Sequence[str], targets: Sequence[str], tokenizer: AutoTokenizer) -> Dict:
-    """Preprocess the data by tokenizing."""
-    # sources are questions, and targets are answers
-    examples = [s + t for s, t in zip(sources, targets)]
-    examples_tokenized, sources_tokenized = [_tokenize_fn(strings, tokenizer) for strings in (examples, sources)]
-    input_ids = examples_tokenized["input_ids"]
-    labels = copy.deepcopy(input_ids)
-    for label, source_len in zip(labels, sources_tokenized["input_ids_lens"]):
-        label[:source_len] = IGNORE_INDEX
-
-    return dict(input_ids=input_ids, labels=labels)
-
+    
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
@@ -428,24 +361,33 @@ class SupervisedDataset(Dataset):
         return dict(input_ids=self.input_ids[i], labels=self.labels[i])
 
 @dataclass
-class DataCollatorForSupervisedDataset(object):
-    """Collate examples for supervised fine-tuning."""
+class DataCollatorForSupervisedDataset:
+    tokenizer: transformers.PreTrainedTokenizer
 
-    tokenizer: AutoTokenizer
+    def __call__(self, instances: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        batch = {"input_ids": [], "labels": []}
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
-        input_ids = torch.nn.utils.rnn.pad_sequence(
-            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
+        for instance in instances:
+            batch["input_ids"].append(instance["input_ids"])
+            batch["labels"].append(instance["labels"])
+
+        # Padding the input_ids and labels
+        batch["input_ids"] = self.tokenizer.pad(
+            {"input_ids": batch["input_ids"]},
+            padding=True,
+            max_length=self.tokenizer.model_max_length,
+            return_tensors="pt",
+        )["input_ids"]
+
+        batch["labels"] = torch.nn.utils.rnn.pad_sequence(
+            batch["labels"], batch_first=True, padding_value=IGNORE_INDEX
         )
-        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
-        return dict(
-            input_ids=input_ids,
-            labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
-        )
-        
 
+        # Creating attention masks
+        batch["attention_mask"] = batch["input_ids"].ne(self.tokenizer.pad_token_id)
+
+        return batch
+    
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
@@ -472,6 +414,7 @@ def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
 
 def main():
     args = parse_args()
+    
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
     send_example_telemetry("loqt_benchmark_gsmk", args)
@@ -529,101 +472,71 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
     accelerator.wait_for_everyone()
         
+    task_type = TaskType.CAUSAL_LM
+    if any(name in args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon", "gpt2", "gpt-neo"]):
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+    elif any(name in args.model_name_or_path.lower() for name in ["phi"]):
+        target_modules = ["q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"]
+    else:
+        raise ValueError(f"Only support LLAMA, Mistral, Falcon, Phi-2, but got {args.model_name_or_path}.")
     
-    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
-    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    if model_args.full_precision:
+    if args.use_loqt:
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
+            args.model_name_or_path,
             low_cpu_mem_usage=True,
             torch_dtype=torch.bfloat16,
-            token=model_args.token,
+            token=args.hub_token,
         )
+        for param in model.parameters():
+            param.requires_grad = False
+        model = LoQTModel(
+            model,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            target_modules=target_modules,
+            quantize_w=args.quantize_w,
+            use_double_quant=args.use_double_quant,
+            device=device,
+            proj_type=args.proj_type,
+            compute_dtype=torch.bfloat16,
+            quantize_projection_matrix=args.quantize_projection_matrix,
+            compensate_quant_error_iterations=args.compensate_quant_error_iterations,
+            is_single_gpu=args.single_gpu,
+            only_train_lora=args.only_train_lora,
+        )
+
     else:
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
+            args.model_name_or_path,
             low_cpu_mem_usage=True,
             torch_dtype=torch.bfloat16,
-            token=model_args.token,
+            token=args.hub_token,
             quantization_config=transformers.BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.bfloat16,
-                bnb_4bit_use_double_quant=False,
-                bnb_4bit_quant_type='nf4',
+                bnb_4bit_use_double_quant=args.use_double_quant,
+                bnb_4bit_quant_type=args.bnb_4bit_quant_type,
             ),
-        )
-    
-    task_type = TaskType.CAUSAL_LM
-    if any(name in model_args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon"]):
-        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
-    elif any(name in model_args.model_name_or_path.lower() for name in ["phi"]):
-        target_modules = ["q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"]
-    else:
-        raise ValueError(f"Only support LLAMA, Mistral, Falcon, Phi-2, but got {model_args.model_name_or_path}.")
-    if args.use_loqt:
-            for param in model.parameters():
-                param.requires_grad = False
-            model = LoQTModel(
-                model, 
-                r=args.lora_r,
-                lora_alpha=args.lora_alpha,
-                target_modules=target_modules, #TODO in pretraining we use ["attn", "attention", "mlp"],
-                quantize_w=args.quantize_w,
-                use_double_quant=args.use_double_quant, 
-                device=device,
-                proj_type=args.proj_type,
-                compute_dtype=dtype, #compute_dtype= torch.bfloat16 if args.dtype == "bfloat16" else torch.float32,
-                quantize_projection_matrix = args.quantize_projection_matrix,
-                compensate_quant_error_iterations = args.compensate_quant_error_iterations,
-                is_single_gpu= args.single_gpu,
-                only_train_lora=args.only_train_lora,
-            )  
-    elif model_args.lora_init:
-        lora_config = LoraConfig(
-            task_type=task_type,
-            inference_mode=False,
-            r=model_args.rank,
-            lora_alpha=model_args.lora_alpha,
-            lora_dropout=0.1,
-            target_modules=target_modules,
-            init_lora_weights=True,
-        )
-        model = get_peft_model(model, lora_config)
-    elif model_args.adapter_name_or_path is not None:
-        model = PeftModel.from_pretrained(
-            model,
-            model_args.adapter_name_or_path,
-            is_trainable=True,
-            token=model_args.token,
-        )
-        
-    else:
-        model = PeftModel.from_pretrained(
-            model,
-            model_args.model_name_or_path,
-            subfolder='loftq_init',
-            is_trainable=True,
-            token=model_args.token,
         )
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        token=model_args.token,
-        cache_dir=training_args.cache_dir,
-        model_max_length=training_args.model_max_length,
+        args.model_name_or_path,
+        token=args.hub_token,
+        cache_dir=args.output_dir,
+        model_max_length=args.max_length,
         padding_side="right",
         use_fast=False,
     )
     special_tokens_dict = dict()
     if tokenizer.pad_token is None:
-        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+        special_tokens_dict["pad_token"] = "[PAD]"
     if tokenizer.eos_token is None:
-        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+        special_tokens_dict["eos_token"] = "</s>"
     if tokenizer.bos_token is None:
-        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+        special_tokens_dict["bos_token"] = "<s>"
     if tokenizer.unk_token is None:
-        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
+        special_tokens_dict["unk_token"] = "<unk>"
+        
 
     smart_tokenizer_and_embedding_resize(
         special_tokens_dict=special_tokens_dict,
@@ -631,50 +544,27 @@ def main():
         model=model,
     )
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
-    train_dataset = data_module['train_dataset']
-    data_collator = data_module['data_collator']
+    # Data Preparation
     
-    # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 3):
-        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+    train_dataset = SupervisedDataset(load_dataset("gsm8k", "main", split="train"), tokenizer)
+    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 
-    # DataLoaders creation:
-    train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
-    )
-
-    # Optimizer
+    #data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=(8 if accelerator.use_fp16 else None))
+    train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
+    
+    # Optimizer 
     no_decay = ["bias", "LayerNorm.weight"]
-    if args.use_loqt or args.use_regular_lora:
-        params1 = [p for n, p in model.named_parameters() if p.requires_grad and not any(nd in n for nd in no_decay)]
-        params2 = [p for n, p in model.named_parameters() if p.requires_grad and any(nd in n for nd in no_decay)]
-    else:
-        params1 = [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)]
-        params2 = [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)]
     optimizer_grouped_parameters = [
         {
-            "params": params1,
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
             "weight_decay": args.weight_decay,
         },
         {
-            "params": params2,
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
             "weight_decay": 0.0,
         },
     ]
-    print('init lr: ', args.learning_rate)
-    
-    
-    ## TODO Deberta specifc - what to do for other models
-    # if 'deberta' in args.model_name_or_path:  
-    #     if not args.use_loqt:
-    #         # no wrapped model
-    #         model.classifier.weight.requires_grad = True
-    #         model.classifier.bias.requires_grad = True
-    #     else:
-    #         model.wrapped_model.classifier.weight.requires_grad = True
-    #         model.wrapped_model.classifier.bias.requires_grad = True
-
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
     
     # math around the number of training steps.
     overrode_max_train_steps = False
@@ -687,33 +577,30 @@ def main():
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
     
+
+    lr_scheduler = get_scheduler(
+        name=args.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=args.num_warmup_steps,
+        num_training_steps=args.max_train_steps,
+    )
+
+    ## TODO Deberta specifc - what to do for other models
+    # if 'deberta' in args.model_name_or_path:  
+    #     if not args.use_loqt:
+    #         # no wrapped model
+    #         model.classifier.weight.requires_grad = True
+    #         model.classifier.bias.requires_grad = True
+    #     else:
+    #         model.wrapped_model.classifier.weight.requires_grad = True
+    #         model.wrapped_model.classifier.bias.requires_grad = True
+
+
+    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, lr_scheduler
+    )
     
     
-    ##### SETTING UP OPTIMIZER #####
-    if not args.enable_galore:
-        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
-    else:
-        from torch import nn
-        galore_params = []
-        for module_name, module in model.named_modules():
-            if not isinstance(module, nn.Linear):
-                continue
-
-            if not any(target_key in module_name for target_key in target_modules):
-                continue
-
-            print('enable GaLore for weights in module: ', module_name)
-            galore_params.append(module.weight)
-
-        id_galore_params = [id(p) for p in galore_params]
-        # make parameters without "rank" to another group
-        regular_params = [p for p in model.parameters() if id(p) not in id_galore_params]
-        # then call galore_adamw
-        param_groups = [{'params': regular_params}, 
-                        {'params': galore_params, 'rank': args.lora_r, 'update_proj_gap': args.update_proj_gap, 'scale': args.galore_scale, 'proj_type': args.proj_type,  'update_proj_gap_arr': update_steps if args.proj_gap_progression != 'static' else []}]
-        optimizer = GaLoreAdamW(param_groups, lr=args.learning_rate)
-    
-
     ##### TRAINABLE PARAMS #####
     # check number of trainable params in optimizer
     num_trainable_params = 0
@@ -722,21 +609,6 @@ def main():
             num_trainable_params += p.numel()
     print('num_trainable_params in optimizer: ', num_trainable_params)
     
-
-    ##### SCHEDULER #####
-    lr_scheduler = get_scheduler(
-        name=args.lr_scheduler_type,
-        optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
-        num_training_steps=args.max_train_steps,
-    )
-    
-    
-    ##### TRACKING #####
-    # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
-    )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -824,6 +696,7 @@ def main():
             active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
         else:
             active_dataloader = train_dataloader
+        breakpoint()
         for step, batch in enumerate(active_dataloader):
             # completed_steps is update_step and global_step is step
             should_reset_B = (
@@ -834,6 +707,7 @@ def main():
             )
             
             if should_reset_B:
+                breakpoint()
                 logger.info(f"Resetting B matrix at step {completed_steps}")
                 model.merge()
                 optimizer.zero_grad()
@@ -842,6 +716,7 @@ def main():
                 model.disable_lora(False)
                 model.lora_zero_init()
                 
+            breakpoint()
             outputs = model(**batch)
             loss = outputs.loss
             if args.with_tracking:
@@ -914,42 +789,6 @@ def get_model_config(model):
         return model.wrapped_model.config
     else:
         return model.config
-
-# Helper function to set model configuration
-def set_model_labels(model, label2id, id2label):
-    if hasattr(model, 'wrapped_model'):
-        model.wrapped_model.config.label2id = label2id
-        model.wrapped_model.config.id2label = id2label
-    else:
-        model.config.label2id = label2id
-        model.config.id2label = id2label
-
-# from https://github.com/yxli2123/LoftQ/blob/main/glue/utils.py
-def show_model_stats_deberta(model,mark_only_lora_as_trainable=True):
-    total = 0
-    lr_adapter = 0
-    if mark_only_lora_as_trainable:
-        for n, m in model.deberta.named_parameters():
-            if 'lora' in n or 'left' in n or 'right' in n:
-                m.requires_grad = True
-                lr_adapter += m.numel()
-            else:
-                if "quant" in n or "word_embeddings.weight" in n:
-                    print(n, m)
-                m.requires_grad = False
-            print(n, m.shape, m.requires_grad)
-            total += m.numel()
-    else:
-        for n, m in model.deberta.named_parameters():
-            if "quant" in n or "word_embeddings.weight" in n:
-                print(n, m)
-            if m.requires_grad:
-                lr_adapter += m.numel()
-                print(lr_adapter)
-            total += m.numel()
-    print(f"Total trainable parameters {lr_adapter}")
-    print(f"We finetune about {lr_adapter / total} ratio of percentages")
-
         
 if __name__ == "__main__":
     main()
