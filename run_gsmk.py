@@ -253,6 +253,9 @@ def parse_args():
     # General Training Parameters
     parser.add_argument("--single_gpu", default=False, action="store_true", help="flag for LoQT to use distributed or not")
     parser.add_argument("--dtype", type=str, default="bfloat16" if torch.cuda.is_bf16_supported() else "float32", help="Data type for training")
+    parser.add_argument("--log_loss_every", type=int, default = 50)
+    
+    parser.add_argument("--save_original_model", default=True, action="store_true", help="flag for LoQT to also save full model and not just model + adapters")
 
     
     return parser.parse_args()
@@ -472,7 +475,7 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
     accelerator.wait_for_everyone()
         
-    task_type = TaskType.CAUSAL_LM
+    #task_type = TaskType.CAUSAL_LM TODO should be used?
     if any(name in args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon", "gpt2", "gpt-neo"]):
         target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
     elif any(name in args.model_name_or_path.lower() for name in ["phi"]):
@@ -487,6 +490,7 @@ def main():
             torch_dtype=torch.bfloat16,
             token=args.hub_token,
         )
+        # TODO is this what we want ?
         for param in model.parameters():
             param.requires_grad = False
         model = LoQTModel(
@@ -566,17 +570,21 @@ def main():
     ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
     
-    # math around the number of training steps.
-    overrode_max_train_steps = False
+    # Determine the number of update steps per epoch
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+
+    # If max_train_steps is not specified, calculate it based on the number of epochs
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-        args.num_training_steps = args.max_train_steps #used by get_projection_update_steps
         overrode_max_train_steps = True
-    
+    else:
+        # If max_train_steps is specified, calculate the number of epochs based on it
+        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+
+    args.num_training_steps = args.max_train_steps  # Used by get_projection_update_steps
+
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
-    
 
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
@@ -585,38 +593,29 @@ def main():
         num_training_steps=args.max_train_steps,
     )
 
-    ## TODO Deberta specifc - what to do for other models
-    # if 'deberta' in args.model_name_or_path:  
-    #     if not args.use_loqt:
-    #         # no wrapped model
-    #         model.classifier.weight.requires_grad = True
-    #         model.classifier.bias.requires_grad = True
-    #     else:
-    #         model.wrapped_model.classifier.weight.requires_grad = True
-    #         model.wrapped_model.classifier.bias.requires_grad = True
-
-
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
-    
-    
-    ##### TRAINABLE PARAMS #####
-    # check number of trainable params in optimizer
-    num_trainable_params = 0
-    for group in optimizer.param_groups:
-        for p in group['params']:
-            num_trainable_params += p.numel()
-    print('num_trainable_params in optimizer: ', num_trainable_params)
-    
 
-    # We need to recalculate our total training steps as the size of the training dataloader may have changed
+    ##### TRAINABLE PARAMS #####
+    # Check number of trainable params in optimizer
+    num_trainable_params = sum(p.numel() for group in optimizer.param_groups for p in group['params'])
+    print('num_trainable_params in optimizer: ', num_trainable_params)
+
+    # Recalculate total training steps as the size of the training dataloader may have changed
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+
+    # Adjust max_train_steps if it was overridden
     if overrode_max_train_steps:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    # Afterwards we recalculate our number of training epochs
+
+    # Recalculate the number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
+    # Log the calculations for debugging purposes
+    logger.info(f"Number of update steps per epoch: {num_update_steps_per_epoch}")
+    logger.info(f"Max training steps: {args.max_train_steps}")
+    logger.info(f"Number of training epochs: {args.num_train_epochs}")
     # Figure out how many steps we should save the Accelerator states
     checkpointing_steps = args.checkpointing_steps
     if checkpointing_steps is not None and checkpointing_steps.isdigit():
@@ -630,6 +629,10 @@ def main():
         experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
         accelerator.init_trackers("loqt_benchmark_GSMK", experiment_config)
 
+    
+    # Log a few random samples from the training set:
+    for index in random.sample(range(len(train_dataset)), 3):
+        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
         
     ##########################################################################################
     ##########################################################################################
@@ -649,42 +652,11 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
     starting_epoch = 0
-    best_eval_loss = float('inf')  # Initialize with infinity, assuming lower is better
-    best_eval_metric = float('-inf')  # Initialize to the worst possible value for maximization
-    current_metric = 0
-
-    # Potentially load in the weights and states from a previous save
-    if args.resume_from_checkpoint:
-        if args.resume_from_checkpoint is not None or args.resume_from_checkpoint != "":
-            checkpoint_path = args.resume_from_checkpoint
-            path = os.path.basename(args.resume_from_checkpoint)
-        else:
-            # Get the most recent checkpoint
-            dirs = [f.name for f in os.scandir(os.getcwd()) if f.is_dir()]
-            dirs.sort(key=os.path.getctime)
-            path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
-            checkpoint_path = path
-            path = os.path.basename(checkpoint_path)
-
-        accelerator.print(f"Resumed from checkpoint: {checkpoint_path}")
-        accelerator.load_state(checkpoint_path)
-        # Extract `epoch_{i}` or `step_{i}`
-        training_difference = os.path.splitext(path)[0]
-
-        if "epoch" in training_difference:
-            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
-            resume_step = None
-            completed_steps = starting_epoch * num_update_steps_per_epoch
-        else:
-            # need to multiply `gradient_accumulation_steps` to reflect real steps
-            resume_step = int(training_difference.replace("step_", "")) * args.gradient_accumulation_steps
-            starting_epoch = resume_step // len(train_dataloader)
-            completed_steps = resume_step // args.gradient_accumulation_steps
-            resume_step -= starting_epoch * len(train_dataloader)
 
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
 
+    # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
         logger.info(f"***** Epoch {epoch} *****")
 
@@ -696,7 +668,7 @@ def main():
             active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
         else:
             active_dataloader = train_dataloader
-        breakpoint()
+
         for step, batch in enumerate(active_dataloader):
             # completed_steps is update_step and global_step is step
             should_reset_B = (
@@ -705,9 +677,8 @@ def main():
                 completed_steps % args.update_proj_gap == 0 and 
                 step % args.gradient_accumulation_steps == 0
             )
-            
+
             if should_reset_B:
-                breakpoint()
                 logger.info(f"Resetting B matrix at step {completed_steps}")
                 model.merge()
                 optimizer.zero_grad()
@@ -715,8 +686,7 @@ def main():
                 model.set_LoRA_requires_grad(True)
                 model.disable_lora(False)
                 model.lora_zero_init()
-                
-            breakpoint()
+
             outputs = model(**batch)
             loss = outputs.loss
             if args.with_tracking:
@@ -746,7 +716,10 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
             
-            logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
+            if step % args.log_loss_every == 0:
+                logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
+                if args.with_tracking:
+                    accelerator.log({"train_loss": loss.item(), "step": completed_steps})
 
         if args.with_tracking:
             log_data = {
@@ -754,7 +727,7 @@ def main():
                 "epoch": epoch,
             }
             accelerator.log(log_data, step=completed_steps)
-        
+
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:
@@ -770,7 +743,7 @@ def main():
         if not args.use_loqt:
             unwrapped_model.save_pretrained(args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save)
         else:
-            model.save_pretrained(args.output_dir)
+            model.save_pretrained(args.output_dir, save_original_model=args.save_original_model)
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:
