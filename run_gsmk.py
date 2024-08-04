@@ -256,7 +256,8 @@ def parse_args():
     parser.add_argument("--log_loss_every", type=int, default = 50)
     
     parser.add_argument("--save_original_model", default=True, action="store_true", help="flag for LoQT to also save full model and not just model + adapters")
-
+    parser.add_argument("--experiment_name", type=str, default="" )
+    
     
     return parser.parse_args()
 
@@ -273,13 +274,6 @@ logger = get_logger(__name__)
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 
-
-@dataclass
-class DataArguments:
-    data_name: str = field(
-        default="gsm8k",
-        metadata={"help": "Dataset name."}
-    )
 
 def set_seed_torch(seed: int):
     random.seed(seed)
@@ -390,20 +384,6 @@ class DataCollatorForSupervisedDataset:
         batch["attention_mask"] = batch["input_ids"].ne(self.tokenizer.pad_token_id)
 
         return batch
-    
-@dataclass
-class TrainingArguments(transformers.TrainingArguments):
-    cache_dir: Optional[str] = field(default=None)
-    optim: str = field(default="adamw_torch")
-    model_max_length: int = field(
-        default=512,
-        metadata={"help": "Maximum sequence length. Sequences will be right padded (and possibly truncated)."},
-    )
-    expt_name: str = field(
-        default="default",
-        metadata={"help": "Experiment name"},
-    )
-
 
 
 def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
@@ -425,9 +405,20 @@ def main():
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
+    if args.experiment_name == "":
+        model_name_trimmed = args.model_name_or_path.replace("/", "_")
+        experiment_name = f"{model_name_trimmed}_GSMK"
+    else:
+        experiment_name = args.experiment_name
+    # add experiment name subfolder in output_dir
+    output_dir = os.path.join(args.output_dir, experiment_name)
     accelerator = (
         Accelerator(log_with=args.report_to, project_dir=args.output_dir) if args.with_tracking else Accelerator()
     )
+    if args.with_tracking:
+        experiment_config = vars(args)
+        experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
+        accelerator.init_trackers(experiment_name, experiment_config)
     print("Accelerator State:", accelerator.state)
     print("Device Setup by Accelerator:", accelerator.device)
 
@@ -574,12 +565,10 @@ def main():
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
 
     # If max_train_steps is not specified, calculate it based on the number of epochs
+    overrode_max_train_steps = False
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-    else:
-        # If max_train_steps is specified, calculate the number of epochs based on it
-        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
     args.num_training_steps = args.max_train_steps  # Used by get_projection_update_steps
 
@@ -610,26 +599,19 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     # Recalculate the number of training epochs
-    args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+    if not overrode_max_train_steps:
+        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
     # Log the calculations for debugging purposes
     logger.info(f"Number of update steps per epoch: {num_update_steps_per_epoch}")
     logger.info(f"Max training steps: {args.max_train_steps}")
     logger.info(f"Number of training epochs: {args.num_train_epochs}")
+
     # Figure out how many steps we should save the Accelerator states
     checkpointing_steps = args.checkpointing_steps
     if checkpointing_steps is not None and checkpointing_steps.isdigit():
         checkpointing_steps = int(checkpointing_steps)
 
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
-    if args.with_tracking:
-        experiment_config = vars(args)
-        # TensorBoard cannot log Enums, need the raw value
-        experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
-        accelerator.init_trackers("loqt_benchmark_GSMK", experiment_config)
-
-    
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")

@@ -1,7 +1,8 @@
 #!/bin/bash
 python run_gsmk.py \
   --model_name_or_path EleutherAI/gpt-neo-1.3B \
-  --num_train_epochs 2 \
+  --experiment_name gsmk_gpt-neo-1.3B_seed9876 \
+  --num_train_epochs 6 \
   --seed 9876 \
   --lora_r 32 \
   --lora_alpha 2 \
@@ -16,6 +17,7 @@ python run_gsmk.py \
   --single_gpu \
   --with_tracking \
   --report_to wandb 
+  #--max_train_steps 1000 \
   # --compensate_quant_error_iterations 5 \
   # --bnb_4bit_quant_type nf4 \
   # --quantize_w '4bit' \

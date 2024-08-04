@@ -233,8 +233,11 @@ class LoQTModel(nn.Module):
                 module_old.maybe_dequantize_LoRA_factors()
                 # Merge the LoRA factors into the main weight matrix
                 AB = module_old.scaling * (module_old.lora_A.weight.T @ module_old.lora_B.weight.T).T.detach()
-                W_deq = bnb_F.dequantize_4bit(module_old.W.weight, module_old.W.weight.quant_state, quant_type=module_old.bnb_4bit_quant_type)
-                W_deq = W_deq.to(dtype=module_old.compute_dtype)
+                if self.quantize_w:
+                    W_deq = bnb_F.dequantize_4bit(module_old.W.weight, module_old.W.weight.quant_state, quant_type=module_old.bnb_4bit_quant_type)
+                    W_deq = W_deq.to(dtype=module_old.compute_dtype)
+                else:
+                    W_deq = module_old.W.weight
                 # Update the weight data in the new model
                 module_new.W.weight.data = W_deq + AB
                 module_old.quantize_LoRA_AB()
