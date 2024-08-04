@@ -6,10 +6,6 @@ python run_gsmk.py \
   --lora_r 32 \
   --lora_alpha 2 \
   --update_proj_gap 2400 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --compensate_quant_error_iterations 5 \
   --max_length 256 \
   --pad_to_max_length \
   --per_device_train_batch_size 2 \
@@ -20,6 +16,10 @@ python run_gsmk.py \
   --single_gpu \
   --with_tracking \
   --report_to wandb 
+#--compensate_quant_error_iterations 5 \
+#   --bnb_4bit_quant_type nf4 \
+#   --quantize_w '4bit' \
+#   --quantize_projection_matrix '4bit' \
 #--warmup_ratio 0.03 \
 #--model_name_or_path LoftQ/Llama-2-7b-hf-4bit-64rank \
 #--model_name_or_path meta-llama/Llama-2-7b-hf \
