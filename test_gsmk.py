@@ -79,7 +79,7 @@ def evaluation(model_args, data_args):
         model_path = model_args.model_name_or_path
 
     if model_args.use_loqt:
-        model = LoQTModel.from_pretrained(model_args.ckpt_dir, device, saved_as_full_model=False)
+        model = LoQTModel.from_pretrained(model_args.ckpt_dir, device, saved_as_full_model=True)
     elif model_args.full_precision:
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_path,
