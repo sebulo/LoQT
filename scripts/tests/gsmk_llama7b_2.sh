@@ -21,10 +21,10 @@ conda activate loqt
 #!/bin/bash
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --experiment_name gsmk_Llama-2-7b-hf_seed11 \
+  --experiment_name gsmk_Llama-2-7b-hf_seed11_r128 \
   --num_train_epochs 12 \
   --seed 11 \
-  --lora_r 32 \
+  --lora_r 128 \
   --lora_alpha 2 \
   --update_proj_gap 2400 \
   --max_length 256 \

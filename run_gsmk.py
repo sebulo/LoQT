@@ -6,6 +6,7 @@ import math
 import os
 import random
 from pathlib import Path
+import datetime
 
 import datasets
 import evaluate
@@ -410,8 +411,12 @@ def main():
         experiment_name = f"{model_name_trimmed}_GSMK"
     else:
         experiment_name = args.experiment_name
+        
     # add experiment name subfolder in output_dir
     output_dir = os.path.join(args.output_dir, experiment_name)
+    
+    time_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = os.path.join(output_dir, time_now)
     accelerator = (
         Accelerator(log_with=args.report_to, project_dir=args.output_dir) if args.with_tracking else Accelerator()
     )

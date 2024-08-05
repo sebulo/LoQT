@@ -1,6 +1,7 @@
 #!/bin/bash
-eval "$(conda shell.bash hook)"
-conda activate loqt
+
+# Set debug mode
+set -x
 
 python run_gsmk.py \
   --model_name_or_path EleutherAI/gpt-neo-1.3B \
@@ -21,10 +22,10 @@ python run_gsmk.py \
   --with_tracking \
   --report_to wandb 
   #--max_train_steps 1000 \
-  # --compensate_quant_error_iterations 5 \
-  # --bnb_4bit_quant_type nf4 \
-  # --quantize_w '4bit' \
-  # --quantize_projection_matrix '4bit' \
-#--warmup_ratio 0.03 \
-#--model_name_or_path LoftQ/Llama-2-7b-hf-4bit-64rank \
-#--model_name_or_path meta-llama/Llama-2-7b-hf \
+  #--compensate_quant_error_iterations 5 \
+  #--bnb_4bit_quant_type nf4 \
+  #--quantize_w '4bit' \
+  #--quantize_projection_matrix '4bit' \
+  #--warmup_ratio 0.03 \
+  #--model_name_or_path LoftQ/Llama-2-7b-hf-4bit-64rank \
+  #--model_name_or_path meta-llama/Llama-2-7b-hf \
