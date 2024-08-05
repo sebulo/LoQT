@@ -11,6 +11,9 @@ from datasets import load_dataset
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 
+from loqt.LoQT import LoQTModel
+
+
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -34,6 +37,9 @@ class ModelArguments:
         default=None,
         metadata={"help": "HF token to access to private models, e.g., meta-llama"},
     )
+    
+    use_loqt: bool= field(default=True)
+    
     model_max_length: int = field(
         default=512,
         metadata={"help": "Maximum sequence length. Sequences will be left padded (and possibly truncated)."},
@@ -67,16 +73,23 @@ def evaluation(model_args, data_args):
     accelerator = Accelerator()
     device = accelerator.device
     print("Loading model...")
-    if model_args.full_precision:
+    if model_args.ckpt_dir:
+        model_path = model_args.ckpt_dir
+    else:
+        model_path = model_args.model_name_or_path
+
+    if model_args.use_loqt:
+        model = LoQTModel.from_pretrained(model_args.ckpt_dir, device, saved_as_full_model=True)
+    elif model_args.full_precision:
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
+            model_path,
             low_cpu_mem_usage=True,
             torch_dtype=torch.float32,
             token=model_args.token,
         )
     else:
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
+            model_path,
             low_cpu_mem_usage=True,
             torch_dtype=torch.bfloat16,
             token=model_args.token,
@@ -87,9 +100,11 @@ def evaluation(model_args, data_args):
                 bnb_4bit_quant_type='nf4',
             ),
         )
+        
+
     print("Loading tokenizer...")
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
+        model_path,
         token=model_args.token,
         model_max_length=model_args.model_max_length,
         padding_side="left",
@@ -106,12 +121,13 @@ def evaluation(model_args, data_args):
     if tokenizer.unk_token is None:
         special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
 
-    print("Resizing tokenizer and embeddings...")
-    smart_tokenizer_and_embedding_resize(
-        special_tokens_dict=special_tokens_dict,
-        tokenizer=tokenizer,
-        model=model,
-    )
+    if special_tokens_dict:
+        print("Resizing tokenizer and embeddings...")
+        smart_tokenizer_and_embedding_resize(
+            special_tokens_dict=special_tokens_dict,
+            tokenizer=tokenizer,
+            model=model,
+        )
 
     model = model.to(device)
 
@@ -226,6 +242,4 @@ if __name__ == "__main__":
     print("Parsed arguments:", model_args, data_args)
     if model_args.ckpt_dir is not None:
         print(f"Using checkpoint directory: {model_args.ckpt_dir}")
-        evaluation(model_args, data_args)
-    else:
-        logging.warning("No checkpoint directory provided.")
+    evaluation(model_args, data_args)

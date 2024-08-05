@@ -592,7 +592,7 @@ class LoraLinear(nn.Module):
                     self.W.weight_grad = torch.zeros(
                         (self.out_features, self.in_features),
                         device=self.offload_device,
-                        requires_grad=False,
+                        requires_grad=True,
                         dtype=self.compute_dtype
                     )
                     self.W.require_grad_W = torch.tensor(True, device=self.device, requires_grad=False)
@@ -648,8 +648,6 @@ class LoraLinear(nn.Module):
         
         if torch.all(W_grad == 0):
             print("Gradient of W is zero")
-        else:
-            print("Gradient of W is good")
         #assert not torch.all(W_grad == 0), "Gradient of W is zero"
 
         # Compute the projection matrices using the unified function

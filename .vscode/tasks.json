@@ -1,0 +1,12 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run pre-launch script",
+            "type": "shell",
+            "command": "source ~/.bashrc && conda activate loqt",
+            "problemMatcher": [],
+            "isBackground": false
+        }
+    ]
+}

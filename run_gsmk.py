@@ -6,6 +6,7 @@ import math
 import os
 import random
 from pathlib import Path
+from datetime import datetime
 
 import datasets
 import evaluate
@@ -405,13 +406,18 @@ def main():
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
-    if args.experiment_name == "":
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if args.experiment_name:
+        experiment_name = args.experiment_name
+    else:
         model_name_trimmed = args.model_name_or_path.replace("/", "_")
         experiment_name = f"{model_name_trimmed}_GSMK"
-    else:
-        experiment_name = args.experiment_name
-    # add experiment name subfolder in output_dir
-    output_dir = os.path.join(args.output_dir, experiment_name)
+    
+    unique_output_dir = os.path.join(args.output_dir, f"{experiment_name}_epochs{args.num_train_epochs}_seed{args.seed}{current_time}")
+    args.output_dir = unique_output_dir
+    output_dir = args.output_dir
+    print('output_dir: ', output_dir)
+    
     accelerator = (
         Accelerator(log_with=args.report_to, project_dir=args.output_dir) if args.with_tracking else Accelerator()
     )
@@ -482,8 +488,8 @@ def main():
             token=args.hub_token,
         )
         # TODO is this what we want ?
-        for param in model.parameters():
-            param.requires_grad = False
+        #for param in model.parameters():
+        #    param.requires_grad = False
         model = LoQTModel(
             model,
             r=args.lora_r,
@@ -547,7 +553,7 @@ def main():
     #data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=(8 if accelerator.use_fp16 else None))
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
     
-    # Optimizer 
+    # # Optimizer 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
@@ -563,14 +569,12 @@ def main():
     
     # Determine the number of update steps per epoch
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-
-    # If max_train_steps is not specified, calculate it based on the number of epochs
-    overrode_max_train_steps = False
-    if args.max_train_steps is None:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-        overrode_max_train_steps = True
+    
+    args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     args.num_training_steps = args.max_train_steps  # Used by get_projection_update_steps
+    
+    breakpoint()
 
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
@@ -593,15 +597,6 @@ def main():
 
     # Recalculate total training steps as the size of the training dataloader may have changed
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-
-    # Adjust max_train_steps if it was overridden
-    if overrode_max_train_steps:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-
-    # Recalculate the number of training epochs
-    if not overrode_max_train_steps:
-        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
     # Log the calculations for debugging purposes
     logger.info(f"Number of update steps per epoch: {num_update_steps_per_epoch}")
     logger.info(f"Max training steps: {args.max_train_steps}")
@@ -637,6 +632,11 @@ def main():
 
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
+    
+    # save the model at the beginning
+    if args.output_dir:
+        accelerator.save_state(args.output_dir)
+        
 
     # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -645,11 +645,8 @@ def main():
         model.train()
         if args.with_tracking:
             total_loss = 0
-        if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
-            # We skip the first `n` batches in the dataloader when resuming from a checkpoint
-            active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
-        else:
-            active_dataloader = train_dataloader
+        
+        active_dataloader = train_dataloader
 
         for step, batch in enumerate(active_dataloader):
             # completed_steps is update_step and global_step is step
@@ -675,16 +672,7 @@ def main():
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
-            def check_grad():
-                import loqt.bnb_with_gradient as bnb_with_gradient
-                for name, module in model.named_modules():
-                    if isinstance(module, bnb_with_gradient.LinearNF4WithGradient):
-                        # logger.info(f"Module {name} is of type LinearNF4WithGradient")
-                        if torch.all(module.weight_grad == 0) and "W" in name:
-                            logger.info(f"grad of {name} is zero")
-                        # else:
-                            # logger.info(f"grad of {name} is not zero")
-            check_grad()
+
             if should_reset_B:
                 model.reinitialize_LoRA_AB_after_merge()
                 optimizer.zero_grad()
@@ -709,9 +697,10 @@ def main():
                 break
             
             if step % args.log_loss_every == 0:
-                logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
                 if args.with_tracking:
-                    accelerator.log({"train_loss": loss.item(), "step": completed_steps})
+                    running_avg_loss = loss.item()/step
+                    accelerator.log({"train_loss": running_avg_loss, "step": completed_steps})
+                logger.info(f"epoch {epoch}, step {step}: {running_avg_loss}")
 
         if args.with_tracking:
             log_data = {
