@@ -22,7 +22,7 @@ conda activate loqt
 
 python test_gsmk.py\
   --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs2_seed987620240805_213009 \
+  --ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs6_seed1120240805_210343 \
   --use_loqt True \
   --batch_size 20 
 

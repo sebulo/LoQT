@@ -258,6 +258,8 @@ def parse_args():
     
     parser.add_argument("--save_original_model", default=True, action="store_true", help="flag for LoQT to also save full model and not just model + adapters")
     parser.add_argument("--experiment_name", type=str, default="" )
+    parser.add_argument("--train_all_params", default=True)
+    
     
     
     return parser.parse_args()
@@ -487,9 +489,10 @@ def main():
             torch_dtype=torch.bfloat16,
             token=args.hub_token,
         )
-        # TODO is this what we want ?
-        #for param in model.parameters():
-        #    param.requires_grad = False
+        if args.train_all_params:
+            # TODO is this what we want ?
+            for param in model.parameters():
+                param.requires_grad = False
         model = LoQTModel(
             model,
             r=args.lora_r,
