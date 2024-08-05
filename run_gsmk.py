@@ -573,8 +573,6 @@ def main():
     args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     args.num_training_steps = args.max_train_steps  # Used by get_projection_update_steps
-    
-    breakpoint()
 
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
@@ -672,6 +670,11 @@ def main():
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
+            
+            if step % args.gradient_accumulation_steps != 0:
+                if step != 0:
+                    assert not should_reset_B
+                continue
 
             if should_reset_B:
                 model.reinitialize_LoRA_AB_after_merge()
@@ -680,7 +683,7 @@ def main():
                 model.set_LoRA_requires_grad(True)
                 model.disable_lora(False)
                 print('num_trainable_params: ', sum(p.numel() for p in model.parameters() if p.requires_grad))
-            elif step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
+            elif (step+1) % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -698,9 +701,8 @@ def main():
             
             if step % args.log_loss_every == 0:
                 if args.with_tracking:
-                    running_avg_loss = loss.item()/step
-                    accelerator.log({"train_loss": running_avg_loss, "step": completed_steps})
-                logger.info(f"epoch {epoch}, step {step}: {running_avg_loss}")
+                    accelerator.log({"train_loss": loss.item(), "step": completed_steps})
+                logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
 
         if args.with_tracking:
             log_data = {
@@ -708,6 +710,7 @@ def main():
                 "epoch": epoch,
             }
             accelerator.log(log_data, step=completed_steps)
+            logger.info(f"epoch {epoch}: {total_loss / len(train_dataloader)}")
 
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
