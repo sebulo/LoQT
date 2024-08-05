@@ -149,11 +149,14 @@ class MatMul4BitGradientWithGrad(torch.autograd.Function):
         #We cannot set require_grad on thr weight_grad, since it is int tensor
         #Instead we supply a bool in the forward pass and a dummy variable that we can write the gradient to
         if require_grad_W:
+            print(f"grad_output shape: {grad_output.shape}, dim: {grad_output.dim()}")
             #check if weight_grad has correct shape, otherwise create it
             if grad_output.dim() == 3:
                 weight_grad.data += torch.einsum('bji,bjk->ki', grad_output, A).t().to(weight_grad.device)
             else:
                 weight_grad.data += torch.matmul(grad_output.t(), A).t().to(weight_grad.device)
+            if torch.all(weight_grad == 0):
+                print("weight_grad is zero in backward")
         if req_gradA:
             grad_A = torch.matmul(grad_output, F.dequantize_4bit(B, quant_state).to(grad_output.dtype).t())
         

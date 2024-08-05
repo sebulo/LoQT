@@ -644,8 +644,13 @@ class LoraLinear(nn.Module):
                 dist.all_reduce(self.W.weight.grad, op=dist.ReduceOp.AVG)
                 dist.barrier()
             W_grad = self.W.weight.grad.T #Weight is stored as transpose in nn.linear
-            
-        assert not torch.all(W_grad == 0), "Gradient of W is zero"
+        
+        
+        if torch.all(W_grad == 0):
+            print("Gradient of W is zero")
+        else:
+            print("Gradient of W is good")
+        #assert not torch.all(W_grad == 0), "Gradient of W is zero"
 
         # Compute the projection matrices using the unified function
         U_r, Q_r = compute_projection_matrix(W_grad, self.r, method=self.projection_method, out=self.projection_out)

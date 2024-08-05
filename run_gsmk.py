@@ -675,6 +675,16 @@ def main():
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
+            def check_grad():
+                import loqt.bnb_with_gradient as bnb_with_gradient
+                for name, module in model.named_modules():
+                    if isinstance(module, bnb_with_gradient.LinearNF4WithGradient):
+                        # logger.info(f"Module {name} is of type LinearNF4WithGradient")
+                        if torch.all(module.weight_grad == 0) and "W" in name:
+                            logger.info(f"grad of {name} is zero")
+                        # else:
+                            # logger.info(f"grad of {name} is not zero")
+            check_grad()
             if should_reset_B:
                 model.reinitialize_LoRA_AB_after_merge()
                 optimizer.zero_grad()
