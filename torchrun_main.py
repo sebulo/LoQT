@@ -176,12 +176,12 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
         val_data = datasets.load_dataset("allenai/c4", "en", split="validation", data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, streaming=True, trust_remote_code=True)
     else:
         val_data = dataset
-    val_data = val_data.shuffle(seed=42)
+    # val_data = val_data.shuffle(seed=42)
     logger.info(f"Loaded validation dataset in {time.time() - _time:.2f} seconds")
     if c4_eval_apiQ:
         random.seed(0)
         valenc = []
-        for _ in range(32):
+        for _ in range(256):
             while True:
                 i = random.randint(0, len(val_data) - 1)
                 tmp = tokenizer(val_data[i]['text'], return_tensors='pt')
