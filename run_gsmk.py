@@ -53,6 +53,9 @@ from optimizers import GaLoreAdamW
 
 from loqt.LoQT import LoQTModel
 
+# for testing
+from test_gsmk import evaluation, ModelArguments, DataArguments
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.38.0.dev0")
 

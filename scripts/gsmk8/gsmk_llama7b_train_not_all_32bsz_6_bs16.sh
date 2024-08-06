@@ -28,13 +28,10 @@ python run_gsmk.py \
   --train_all_params False \
   --update_proj_gap 100000 \
   --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 8 \
+  --per_device_train_batch_size 16 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 4e-4 \
+  --learning_rate 2e-4 \
   --output_dir checkpoints \
   --use_loqt true \
   --single_gpu \

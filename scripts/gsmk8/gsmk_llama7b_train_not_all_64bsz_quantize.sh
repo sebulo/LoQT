@@ -19,17 +19,24 @@ nvidia-smi
 eval "$(conda shell.bash hook)"
 conda activate loqt
 
-
-python test_gsmk.py\
+python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs2_seed987620240805_213009 \
-  --use_loqt True \
-  --batch_size 20 
-
-  #--ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs3_seed1120240805_203109 \ #
-
-  #--ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs6_seed1120240805_172950 \
-  #--ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs6_seed1120240805_172553 \
-  #--ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs6_seed1120240805_173133 \
-
-  #--ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs5_seed987620240805_141153 \
+  --num_train_epochs 6 \
+  --seed 11 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 8 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 4e-4 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb 

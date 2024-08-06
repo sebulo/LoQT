@@ -19,24 +19,9 @@ nvidia-smi
 eval "$(conda shell.bash hook)"
 conda activate loqt
 
-python run_gsmk.py \
+
+python test_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 11 \
-  --lora_r 32 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 8 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 4e-4 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb 
+  --ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs6_seed1120240805_224459 \
+  --use_loqt True \
+  --batch_size 20 
