@@ -26,6 +26,7 @@ python run_gsmk.py \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
+  --per_device_eval_batch_size 16 \
   --update_proj_gap 500 \
   --max_length 512 \
   --bnb_4bit_quant_type nf4 \

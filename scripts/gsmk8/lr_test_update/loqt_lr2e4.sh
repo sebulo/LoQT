@@ -25,6 +25,7 @@ python run_gsmk.py \
   --seed 11 \
   --lora_r 64 \
   --lora_alpha 2 \
+  --per_device_eval_batch_size 16 \
   --train_all_params False \
   --update_proj_gap 1000 \
   --max_length 512 \
