@@ -262,6 +262,8 @@ def parse_args():
     parser.add_argument("--save_original_model", default=True, action="store_true", help="flag for LoQT to also save full model and not just model + adapters")
     parser.add_argument("--experiment_name", type=str, default="" )
     parser.add_argument("--train_all_params", default=True)
+    parser.add_argument('--eval_subset_dataset', type=float, default=1.0, help="subset to test on")
+    parser.add_argument("--run_eval_every_epoch", type=int, default = 2)
     
     
     
@@ -640,7 +642,6 @@ def main():
     # save the model at the beginning
     if args.output_dir:
         accelerator.save_state(args.output_dir)
-        
 
     # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -706,9 +707,14 @@ def main():
                 break
             
             if step % args.log_loss_every == 0:
+                logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
                 if args.with_tracking:
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
-                logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
+                    
+        if epoch % args.run_eval_every_epoch:
+            accuracy = run_evaluation(args.output_dir, model,  tokenizer,args )
+            accelerator.log({"eval accuracy": accuracy, "step": completed_steps, "epoch": epoch})
+            logger.info(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
 
         if args.with_tracking:
             log_data = {
@@ -745,6 +751,32 @@ def main():
     ##########################################################################################
     ##########################################################################################
 
+def run_evaluation(model_dir, model,  tokenizer,args ):
+    # Find the latest checkpoint directory
+    print(f"Using latest checkpoint directory for evaluation: {model_dir}")
+    
+    # get full model
+    org_model = model.return_original_model()
+    
+    tokenizer.save_pretrained(args.output_dir)
+    # Create model_args and data_args for evaluation
+    model_args = ModelArguments(
+        model_name_or_path=args.model_name_or_path,
+        ckpt_dir=model_dir,
+        full_precision=True,
+        token='x',
+        model_max_length=args.max_length,
+        use_loqt=args.use_loqt
+    )
+    
+    data_args = DataArguments(
+        data_name="gsm8k",
+        batch_size=32  # Adjust batch size as needed
+    )
+    
+    # Call the evaluation function
+    accuracy = evaluation(model_args, data_args, model =org_model, print_decoding = False, subset_dataset = args.eval_subset_dataset)
+    return accuracy
     
 # Helper function to get model configuration
 def get_model_config(model):

@@ -200,14 +200,15 @@ class LoQTModel(nn.Module):
                 repr_str += f"\n  ({name}): {param.size()}"
         return repr_str
     
-    def save_pretrained(self, path, save_original_model=False):
+    def save_pretrained(self, path, save_original_model=False, only_save_original_model=False):
         # Ensure all parameters are contiguous
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
         if save_original_model:
             model_to_save = self.return_original_model()
             torch.save(model_to_save, os.path.join(path, "original_model.pth"))
-        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
+        if not only_save_original_model:
+            torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)

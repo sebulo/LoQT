@@ -69,7 +69,7 @@ def smart_tokenizer_and_embedding_resize(
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
-def evaluation(model_args, data_args):
+def evaluation(model_args, data_args, model = None, print_decoding = True, subset_dataset = 1.0):
     accelerator = Accelerator()
     device = accelerator.device
     print("Loading model...")
@@ -78,7 +78,9 @@ def evaluation(model_args, data_args):
     else:
         model_path = model_args.model_name_or_path
 
-    if model_args.use_loqt:
+    if model:
+        model = model
+    elif model_args.use_loqt:
         model = LoQTModel.from_pretrained(model_args.ckpt_dir, device, saved_as_full_model=True)
     elif model_args.full_precision:
         model = transformers.AutoModelForCausalLM.from_pretrained(
@@ -138,6 +140,12 @@ def evaluation(model_args, data_args):
     dataset = load_dataset(data_args.data_name, "main")
     test_set = dataset['test']
 
+    if subset_dataset < 1.0:
+        test_set = test_set.select(range(int(len(test_set) * subset_dataset)))
+        print(f'using subset {subset_dataset} of test set')
+        
+    
+
     print("Formatting inputs...")
     question = [f"{example['question']}{QUESTION_PROMPT}" for example in test_set]
     answer = []
@@ -193,16 +201,21 @@ def evaluation(model_args, data_args):
         decoded_pred = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
 
         # Extract the numbers in sentences
-        print(f"Decoded predictions for step {step}: {decoded_pred}")
+        if print_decoding:
+            print(f"Decoded predictions for step {step}: {decoded_pred}")
         ans_pred_list += [extract_answer_number(sentence_pred) for sentence_pred in decoded_pred]
 
-    print("Prediction:", ans_pred_list)
-    print("Ground truth:", answer)
+
+    if print_decoding:
+        print("Prediction:", ans_pred_list)
+        print("Ground truth:", answer)
 
     accuracy = compute_accuracy(answer, ans_pred_list)
 
     print(f"Model: {model_args.model_name_or_path} | GSM8K test accuracy: {100 * accuracy:.2f}% | "
           f"Full precision: {model_args.full_precision}")
+
+    return accuracy
 
 def extract_answer_number(sentence: str) -> float:
     sentence = sentence.replace(',', '')
