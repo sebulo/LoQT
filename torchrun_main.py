@@ -15,7 +15,7 @@ import transformers
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 from transformers import LlamaForCausalLM as HF_LlamaForCausalLM
 
-import datasets
+import datasets 
 import datasets.distributed
 import wandb
 
@@ -166,7 +166,9 @@ def load_model(args, cache_dir):
     return model, model_config
 
 @torch.no_grad()
-def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None):
+def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None, tokenizer=None):
+    c4_eval_apiQ = True
+    seqlen = 1024
     is_training_at_entry = model.training
     model.eval()
     _time = time.time()
@@ -176,7 +178,29 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
         val_data = dataset
     val_data = val_data.shuffle(seed=42)
     logger.info(f"Loaded validation dataset in {time.time() - _time:.2f} seconds")
-
+    if c4_eval_apiQ:
+        random.seed(0)
+        valenc = []
+        for _ in range(32):
+            while True:
+                i = random.randint(0, len(val_data) - 1)
+                tmp = tokenizer(val_data[i]['text'], return_tensors='pt')
+                if tmp.input_ids.shape[1] >= seqlen:
+                    break
+            i = random.randint(0, tmp.input_ids.shape[1] - seqlen)
+            j = i + seqlen
+            valenc.append(tmp.input_ids[:, i:j])
+        valenc_stacked = torch.hstack(valenc)
+        #detokenize to fit directly into the remaining logic
+        sequence_list = []
+        for seq in valenc:
+            res_string = ""
+            for token_id in seq.tolist()[0]:
+                res_string += tokenizer.decode(token_id, skip_special_tokens=True)
+            sequence_list.append(res_string)
+        # valenc_text = [tokenizer.decode(token_id, skip_special_tokens=True) 
+        #                for v in valenc for token_id in v.tolist()[0]]
+        val_data = datasets.Dataset.from_dict({'text': sequence_list})
     if not args.single_gpu:
         val_data = datasets.distributed.split_dataset_by_node(val_data, rank=global_rank, world_size=world_size)
 
@@ -401,7 +425,7 @@ def main(args):
             print('Performing Evaluation After Loading Model')
             logger.info(f"Performing evaluation at step {update_step}")
             total_loss, evaluated_on_tokens = evaluate_model(
-                model, preprocess_batched, tokenizer.pad_token_id, global_rank, world_size, device, args.batch_size, eval_dataset
+                model, preprocess_batched, tokenizer.pad_token_id, global_rank, world_size, device, args.batch_size, eval_dataset, tokenizer
             )
             # Calculate the perplexity based on the total_loss returned from the evaluation
             perplexity = torch.exp(torch.tensor(total_loss))
