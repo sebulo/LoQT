@@ -181,7 +181,7 @@ def parse_args():
         choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"],
     )
     parser.add_argument(
-        "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
+        "--num_warmup_steps_procentage", type=float, default=0.0, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
@@ -263,7 +263,7 @@ def parse_args():
     parser.add_argument("--experiment_name", type=str, default="" )
     parser.add_argument("--train_all_params", default=True)
     parser.add_argument('--eval_subset_dataset', type=float, default=1.0, help="subset to test on")
-    parser.add_argument("--run_eval_every_epoch", type=int, default = 2)
+    parser.add_argument("--run_eval_every_epoch", type=int, default = 1)
     
     
     
@@ -578,17 +578,19 @@ def main():
     # Determine the number of update steps per epoch
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     
-    args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
+    if args.max_train_steps is None:
+        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     args.num_training_steps = args.max_train_steps  # Used by get_projection_update_steps
 
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
 
+    num_warmup_steps = args.num_warmup_steps_procentage * args.max_train_steps
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
         optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
+        num_warmup_steps=num_warmup_steps,
         num_training_steps=args.max_train_steps,
     )
 
@@ -635,6 +637,7 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
     starting_epoch = 0
+    best_acc = 0
 
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
@@ -711,9 +714,12 @@ def main():
                 if args.with_tracking:
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
                     
-        if epoch % args.run_eval_every_epoch:
-            accuracy = run_evaluation(args.output_dir, model,  tokenizer,args )
-            accelerator.log({"eval accuracy": accuracy, "step": completed_steps, "epoch": epoch})
+        if epoch > 0 and (epoch % args.run_eval_every_epoch == 0 or epoch == args.num_train_epochs - 1):
+            
+            accuracy = run_evaluation(args.output_dir, model, tokenizer, device, args)
+            if accuracy > best_acc:
+                best_acc = accuracy
+            accelerator.log({"eval accuracy": accuracy, "step": completed_steps, "epoch": epoch, "best eval accuracy": best_acc})
             logger.info(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
 
         if args.with_tracking:
@@ -739,7 +745,7 @@ def main():
         if not args.use_loqt:
             unwrapped_model.save_pretrained(args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save)
         else:
-            model.save_pretrained(args.output_dir, save_original_model=args.save_original_model)
+            model.save_pretrained(args.output_dir, save_original_model=args.save_original_model, only_save_original_model=True)
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:
@@ -751,12 +757,15 @@ def main():
     ##########################################################################################
     ##########################################################################################
 
-def run_evaluation(model_dir, model,  tokenizer,args ):
+def run_evaluation(model_dir, model,  tokenizer, device, args ):
     # Find the latest checkpoint directory
     print(f"Using latest checkpoint directory for evaluation: {model_dir}")
     
     # get full model
     org_model = model.return_original_model()
+    
+    # Move the model off the device
+    model.to('cpu')
     
     tokenizer.save_pretrained(args.output_dir)
     # Create model_args and data_args for evaluation
@@ -771,11 +780,13 @@ def run_evaluation(model_dir, model,  tokenizer,args ):
     
     data_args = DataArguments(
         data_name="gsm8k",
-        batch_size=32  # Adjust batch size as needed
+        batch_size=args.per_device_eval_batch_size  # Adjust batch size as needed
     )
     
     # Call the evaluation function
     accuracy = evaluation(model_args, data_args, model =org_model, print_decoding = False, subset_dataset = args.eval_subset_dataset)
+    
+    model.to(device)
     return accuracy
     
 # Helper function to get model configuration

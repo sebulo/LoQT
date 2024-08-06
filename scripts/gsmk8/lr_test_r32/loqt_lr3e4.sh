@@ -21,15 +21,19 @@ conda activate loqt
 
 python run_gsmk.py \
   --model_name_or_path checkpoints/llama7b \
-  --num_train_epochs 2 \
-  --seed 9876 \
+  --num_train_epochs 6 \
+  --seed 11 \
   --lora_r 32 \
   --lora_alpha 2 \
-  --update_proj_gap 2400 \
-  --max_length 256 \
+  --train_all_params False \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 2 \
-  --gradient_accumulation_steps 4 \
+  --per_device_train_batch_size 16 \
+  --gradient_accumulation_steps 1 \
   --learning_rate 3e-4 \
   --output_dir checkpoints \
   --use_loqt true \

@@ -20,7 +20,7 @@ eval "$(conda shell.bash hook)"
 conda activate loqt
 
 python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --model_name_or_path checkpoints/llama7b \
   --num_train_epochs 6 \
   --seed 11 \
   --lora_r 32 \

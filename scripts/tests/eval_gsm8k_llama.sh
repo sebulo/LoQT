@@ -1,6 +1,6 @@
 #!/bin/bash
 python test_gsmk.py\
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --model_name_or_path checkpoints/llama7b \
   --ckpt_dir checkpoints/meta-llama_Llama-2-7b-hf_GSMK_epochs6_seed1120240805_172950 \
   --use_loqt True \
   --batch_size 20 \

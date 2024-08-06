@@ -1,6 +1,6 @@
 #!/bin/bash
 python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --model_name_or_path checkpoints/llama7b \
   --num_train_epochs 20 \
   --seed 9876 \
   --lora_r 64 \
@@ -23,7 +23,7 @@ python run_gsmk.py \
 #   --quantize_projection_matrix '4bit' \
 #--warmup_ratio 0.03 \
 #--model_name_or_path LoftQ/Llama-2-7b-hf-4bit-64rank \
-#--model_name_or_path meta-llama/Llama-2-7b-hf \
+#--model_name_or_path checkpoints/llama7b \
 
 # LoftQ: train 4-bit 64-rank llama-2-7b with LoftQ on GSM8K using 8 A100s
 # global batch_size=64
