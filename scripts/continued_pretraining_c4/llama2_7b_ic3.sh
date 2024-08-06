@@ -12,7 +12,7 @@ torchrun --standalone --nproc_per_node 4 torchrun_main.py \
     --lr 0.0002 \
     --galore_scale 0.25 \
     --rank 1024 \
-    --update_proj_gap 10000 \
+    --update_proj_gap 500 \
     --batch_size 32 \
     --total_batch_size 512 \
     --num_training_steps 1500 \
@@ -29,7 +29,7 @@ torchrun --standalone --nproc_per_node 4 torchrun_main.py \
     --save_dir checkpoints/llama2_7b_c4 \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
-    --name llam2_7b_1.2_10k_c4_loqt \
+    --name llam2_7b_1.2_500_c4_loqt_2 \
     --use_offloading True \
     --use_loqt True \
     --wandb_entity PLoRAQ \

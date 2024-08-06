@@ -10,7 +10,7 @@ torchrun --standalone --nproc_per_node 4 torchrun_main.py \
     --num_training_steps 1500 \
     --warmup_steps 150 \
     --dtype bfloat16 \
-    --eval_every 300 \
+    --eval_every 1 \
     --optimizer adam8bit \
     --lora_alpha 0.25 \
     --bnb_4bit_quant_type nf4 \

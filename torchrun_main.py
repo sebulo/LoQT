@@ -171,7 +171,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     model.eval()
     _time = time.time()
     if dataset is None:
-        val_data = datasets.load_dataset("allenai/c4", "en", split="validation", streaming=True, trust_remote_code=True)
+        val_data = datasets.load_dataset("allenai/c4", "en", split="validation", data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, streaming=True, trust_remote_code=True)
     else:
         val_data = dataset
     val_data = val_data.shuffle(seed=42)
