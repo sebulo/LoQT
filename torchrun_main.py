@@ -168,7 +168,7 @@ def load_model(args, cache_dir):
 @torch.no_grad()
 def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None, tokenizer=None):
     c4_eval_apiQ = True
-    seqlen = 1024
+    seqlen = 2048
     is_training_at_entry = model.training
     model.eval()
     _time = time.time()
@@ -190,7 +190,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
             i = random.randint(0, tmp.input_ids.shape[1] - seqlen)
             j = i + seqlen
             valenc.append(tmp.input_ids[:, i:j])
-        valenc_stacked = torch.hstack(valenc)
+
         #detokenize to fit directly into the remaining logic
         sequence_list = []
         for seq in valenc:
