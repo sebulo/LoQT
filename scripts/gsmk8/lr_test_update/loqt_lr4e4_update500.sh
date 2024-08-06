@@ -34,7 +34,7 @@ python run_gsmk.py \
   --pad_to_max_length \
   --per_device_train_batch_size 16 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 2e-4 \
+  --learning_rate 4e-4 \
   --output_dir checkpoints \
   --use_loqt true \
   --single_gpu \
