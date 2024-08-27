@@ -146,6 +146,56 @@ class LoQTModel(nn.Module):
 
         torch.cuda.empty_cache()
 
+    def install_reset_B_hooks(self):
+        if not self.reset_B_hook_installed:
+            for module in self.modules():
+                if isinstance(module, LoraLinear):
+                    # Forward pre-hook to handle merging before forward pass
+                    module.register_forward_pre_hook(self._check_reset_B_merge_hook)
+                    # Backward hook to handle reinitializing after backward pass
+                    module.register_full_backward_hook(self._check_reset_B_reinitialize_hook)
+            self.reset_B_hook_installed = True
+
+
+    def set_update_steps(self, merge_update_steps, reinitialize_update_steps):
+        self.merge_update_steps = merge_update_steps
+        self.reinitialize_update_steps = reinitialize_update_steps
+
+
+    def _check_reset_B_merge_hook(self, module, input, output):
+        self.gradient_step_counter += 1
+        # Check if we should reset B
+        if self.gradient_step_counter in self.update_steps:
+            # TODO missing multi gpu support
+            if isinstance(module, LoraLinear):
+                module.merge()
+                module.set_W_requires_grad(True)
+                torch.cuda.empty_cache()
+
+            
+    def _check_reset_B_reinitialize_hook(self, module, input, output):
+        # Increment the counter and check if we need to reset B (second phase)
+        if (self.gradient_step_counter +1) in self.update_steps:
+            if isinstance(module, LoraLinear):
+                module.reinitialize_LoRA_AB_after_merge()
+                if self.only_train_lora:
+                    for param in module.parameters():
+                        param.requires_grad = False
+                
+                if isinstance(module, LoraLinear):
+                    module.set_W_requires_grad(False)
+                torch.cuda.empty_cache()
+
+    def should_reset_B(self):
+        #(update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0) # TODO fix this in computation
+        if self.gradient_step_counter in self.update_steps:
+            return True
+        return False
+            
+    def set_update_steps(self, update_steps, total_steps):
+        self.total_steps = total_steps
+        self.update_steps = update_steps
+    
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
         parent_name = ".".join(module_names_list[:-1])
