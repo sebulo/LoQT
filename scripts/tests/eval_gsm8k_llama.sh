@@ -18,7 +18,7 @@ nvidia-smi
 eval "$(conda shell.bash hook)"
 conda activate loqt
 
-python test_gsmk.py\
+python eval_gsmk.py\
   --model_name_or_path meta-llama/Llama-2-7b-hf \
   --ckpt_dir checkpoints/llama7b/models--meta-llama--Llama-2-7b-hf \
   --batch_size 16
