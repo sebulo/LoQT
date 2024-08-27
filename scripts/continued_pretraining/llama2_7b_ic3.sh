@@ -1,11 +1,3 @@
- 
-# loqt - our code: run on h200
-# galore - our code: optimizer to galore, use_loqt false
-# full - our code: adam, h200
-
-# lora - new code
-
-
 torchrun --standalone --nproc_per_node 4 torchrun_main.py \
     --model_name /iopsstor/scratch/cscs/vsnbjarn/Llama-2-7b-hf \
     --dataset_name /iopsstor/scratch/cscs/vsnbjarn/raw_pretraining_data \
