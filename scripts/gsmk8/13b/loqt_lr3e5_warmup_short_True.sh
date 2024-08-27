@@ -25,7 +25,7 @@ python run_gsmk.py \
   --seed 11 \
   --lora_r 64 \
   --lora_alpha 2 \
-  --train_all_params False \
+  --train_all_params True \
   --num_warmup_steps_procentage 0.03 \
   --update_proj_gap 100000 \
   --max_length 512 \
@@ -48,7 +48,7 @@ python run_gsmk.py \
   --seed 11 \
   --lora_r 64 \
   --lora_alpha 2 \
-  --train_all_params False \
+  --train_all_params True \
   --num_warmup_steps_procentage 0.03 \
   --update_proj_gap 100000 \
   --max_length 512 \
@@ -56,7 +56,7 @@ python run_gsmk.py \
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 8 \
+  --per_device_train_batch_size 4 \
   --gradient_accumulation_steps 1 \
   --learning_rate 5e-5 \
   --output_dir checkpoints \
