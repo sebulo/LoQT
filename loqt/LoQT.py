@@ -78,6 +78,11 @@ class LoQTModel(nn.Module):
         self.use_eigenh_for_projection = use_eigenh_for_projection
         self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
         self.train_projection_matrix = train_projection_matrix
+        
+        #TODO new hook func
+        self.gradient_step_counter = 0  # Counter for gradient steps
+        self.reset_B_hook_installed = False  # Ensure the hook is only installed once
+        
 
         # Initialize the configuration with the given parameters
         self._config = LoQT_Config(
@@ -135,6 +140,9 @@ class LoQTModel(nn.Module):
             parent = self._get_parent(module_name)
             module_suffix = module_name.split(".")[-1]
             setattr(parent, module_suffix, new_module)
+
+        self.install_reset_B_hook()
+        
 
         torch.cuda.empty_cache()
 
