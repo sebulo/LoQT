@@ -10,6 +10,9 @@ import torch.distributed as dist
 from loqt.utils import create_zero_initialized_linear_layer, eigenH_decomposition
 from loqt.bnb_with_gradient import LinearNF4WithGradient
 import copy
+import time
+import torch.distributed as dist
+from loqt.utils import get_model, get_proj_update_steps, broadcast_parameters, load_model_from_checkpoint
 
 @dataclass
 class LoQT_Config:
@@ -79,11 +82,6 @@ class LoQTModel(nn.Module):
         self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
         self.train_projection_matrix = train_projection_matrix
         
-        #TODO new hook func
-        self.gradient_step_counter = 0  # Counter for gradient steps
-        self.reset_B_hook_installed = False  # Ensure the hook is only installed once
-        
-
         # Initialize the configuration with the given parameters
         self._config = LoQT_Config(
             r=r,
@@ -141,11 +139,58 @@ class LoQTModel(nn.Module):
             module_suffix = module_name.split(".")[-1]
             setattr(parent, module_suffix, new_module)
 
-        self.install_reset_B_hook()
-        
+         # Register hooks on the model itself
+        self.gradient_step_counter = 0
+        self.register_forward_hook(self._model_pre_forward_hook)
+        self.register_backward_hook(self._model_backward_hook)
+        #self.register_full_backward_hook(self._model_backward_hook)
 
         torch.cuda.empty_cache()
+        
 
+    def _model_pre_forward_hook(self, module, input, output):
+        # This hook is called at the start of each forward pass of the entire model
+        print("FORWARD HOOK")
+        
+        if self.gradient_step_counter in self.update_steps:
+            dist.barrier()
+            start_time_merge = time.time()
+            torch.cuda.empty_cache()
+            self.merge()
+            torch.cuda.empty_cache()
+
+            if not self.is_single_gpu:
+                dist.barrier()
+                broadcast_parameters(self, 0) # TODO fix local rank here
+            self.set_W_requires_grad(True)
+            
+            end_time_merge = time.time()
+            print("end_time_merge - start_time_merge",end_time_merge - start_time_merge)
+        
+        self.gradient_step_counter +=1
+        
+        print("self.gradient_step_counter",self.gradient_step_counter)
+        
+        
+    def _model_backward_hook(self, module, input, output):
+        # This hook is called at the end of the backward pass for the entire model
+        print("BACKWARD HOOK")
+        print("self.gradient_step_counter",self.gradient_step_counter)
+        print("(self.gradient_step_counter-1) in self.update_steps",(self.gradient_step_counter-1) in self.update_steps)
+        breakpoint()
+        if (self.gradient_step_counter-1) in self.update_steps:
+        
+            self.reinitialize_LoRA_AB_after_merge()
+            
+            self.set_W_requires_grad(False)
+            if not self.is_single_gpu:
+                dist.barrier()
+                broadcast_parameters(self, 0) # TODO fix local rank here
+            
+            import gc; gc.collect()
+            torch.cuda.empty_cache()
+        breakpoint()
+    
     def install_reset_B_hooks(self):
         if not self.reset_B_hook_installed:
             for module in self.modules():
@@ -161,9 +206,8 @@ class LoQTModel(nn.Module):
         self.merge_update_steps = merge_update_steps
         self.reinitialize_update_steps = reinitialize_update_steps
 
-
-    def _check_reset_B_merge_hook(self, module, input, output):
-        self.gradient_step_counter += 1
+    #TODO fix memory clean and distributed setting like before we transitioned to hooks
+    def _check_reset_B_merge_hook(self, module, input):
         # Check if we should reset B
         if self.gradient_step_counter in self.update_steps:
             # TODO missing multi gpu support
@@ -172,10 +216,10 @@ class LoQTModel(nn.Module):
                 module.set_W_requires_grad(True)
                 torch.cuda.empty_cache()
 
-            
+    #TODO fix memory clean and distributed setting like before we transitioned to hooks
     def _check_reset_B_reinitialize_hook(self, module, input, output):
         # Increment the counter and check if we need to reset B (second phase)
-        if (self.gradient_step_counter +1) in self.update_steps:
+        if self.gradient_step_counter in self.update_steps:
             if isinstance(module, LoraLinear):
                 module.reinitialize_LoRA_AB_after_merge()
                 if self.only_train_lora:
@@ -185,6 +229,8 @@ class LoQTModel(nn.Module):
                 if isinstance(module, LoraLinear):
                     module.set_W_requires_grad(False)
                 torch.cuda.empty_cache()
+        print("self.gradient_step_counter",self.gradient_step_counter)
+        self.gradient_step_counter += 1
 
     def should_reset_B(self):
         #(update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0) # TODO fix this in computation
@@ -192,8 +238,7 @@ class LoQTModel(nn.Module):
             return True
         return False
             
-    def set_update_steps(self, update_steps, total_steps):
-        self.total_steps = total_steps
+    def set_update_steps(self, update_steps):
         self.update_steps = update_steps
     
     def _get_parent(self, module_name):

@@ -582,7 +582,6 @@ def main(args):
     unique_id = int(time.time())
     unique_directory_name = f"loqt_{unique_id}"
 
-    breakpoint()
     for batch_idx, batch in enumerate(dataloader):
         if batch_idx < skip_batches and args.skip_batches_in_continue_from: 
             continue
@@ -612,7 +611,12 @@ def main(args):
         loss = model(**batch, labels=labels).loss
 
         scaled_loss = loss / args.gradient_accumulation
+        print("before backward")
+        breakpoint()
         scaled_loss.backward()
+        
+        breakpoint()
+        print("after backward")
         
         if global_rank==0 and args.log_max_memory and update_step > 0 and update_step % args.log_max_memory_steps == 0:
             gpu_metrics = get_gpu_metrics_nvitop(this_process, suffix='_after_backward')
