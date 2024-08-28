@@ -142,8 +142,8 @@ class LoQTModel(nn.Module):
          # Register hooks on the model itself
         self.gradient_step_counter = 0
         self.register_forward_hook(self._model_pre_forward_hook)
-        self.register_backward_hook(self._model_backward_hook)
-        #self.register_full_backward_hook(self._model_backward_hook)
+        #self.register_backward_hook(self._model_backward_hook)
+        self.register_full_backward_hook(self._model_backward_hook)
 
         torch.cuda.empty_cache()
         
