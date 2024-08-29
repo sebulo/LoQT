@@ -362,6 +362,11 @@ def main(args):
         print('Using Hugging Face cache directory')
         model, model_config = load_model(args, None)
         
+        
+    update_steps = get_proj_update_steps(args)
+    print(f"Projection update steps: {update_steps}")
+    
+        
     if args.use_loqt and not args.continue_from:
         logger.info(f"Wrapping model with LoQT")
         model = LoQTModel(
@@ -383,7 +388,7 @@ def main(args):
             init_lora_AB_as_random_and_zeros=args.init_lora_AB_as_random_and_zeros,
             train_projection_matrix=args.train_projection_matrix,
             only_train_lora=args.only_train_lora,
-            
+            update_steps=update_steps,
         )
         if args.only_train_lora:
             args.use_loqt=False # make sure not to update weights 
@@ -406,10 +411,6 @@ def main(args):
             # Calculate the perplexity based on the total_loss returned from the evaluation
             perplexity = torch.exp(torch.tensor(total_loss))
             logger.info(f"Eval loss at step {update_step}: {total_loss}, perplexity: {perplexity}")
-
-    update_steps = get_proj_update_steps(args)
-    model.set_update_steps(update_steps)
-    print(f"Projection update steps: {update_steps}")
     
     if args.activation_checkpointing:
         model.gradient_checkpointing_enable()
@@ -588,15 +589,6 @@ def main(args):
  
         global_step += 1
         local_step += 1
-        
-        # should_reset_B = (
-        #     args.use_loqt and 
-        #     update_step in update_steps and
-        #     global_step % args.gradient_accumulation == 0 and
-        #     (
-        #         (update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0)
-        #     )  # do not merge in last step before final eval. Only if first merge ste
-        # )
         
         if update_step > args.num_training_steps:
             logger.info(f"Reached max number of update steps (f{args.num_training_steps}). Stopping training.")

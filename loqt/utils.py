@@ -7,8 +7,8 @@ import json
 
 def get_proj_update_steps(args):
     steps = [0]
-    current_step = args.update_proj_gap
-    current_gap = args.update_proj_gap
+    current_step = args.update_proj_gap * args.gradient_accumulation # Update the projection gap every update_proj_gap steps - use gradient accumulation step as the unit
+    current_gap = current_step
     step_count = 0
 
     if args.proj_gap_progression == "static":

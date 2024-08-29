@@ -12,7 +12,7 @@ from loqt.bnb_with_gradient import LinearNF4WithGradient
 import copy
 import time
 import torch.distributed as dist
-from loqt.utils import get_model, get_proj_update_steps, broadcast_parameters, load_model_from_checkpoint
+from loqt.utils import broadcast_parameters
 
 @dataclass
 class LoQT_Config:
@@ -56,7 +56,8 @@ class LoQTModel(nn.Module):
         model_config=None,
         use_eigenh_for_projection=False,
         init_lora_AB_as_random_and_zeros=False,
-        train_projection_matrix=False
+        train_projection_matrix=False,
+        update_steps=[]
     ):
         if r <= 0:
             raise ValueError("r must be positive. If you want r == 0, use the original model.")
@@ -81,6 +82,7 @@ class LoQTModel(nn.Module):
         self.use_eigenh_for_projection = use_eigenh_for_projection
         self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
         self.train_projection_matrix = train_projection_matrix
+        self.update_steps = update_steps
         
         # Initialize the configuration with the given parameters
         self._config = LoQT_Config(
@@ -131,6 +133,7 @@ class LoQTModel(nn.Module):
                 use_eigenh_for_projection=use_eigenh_for_projection,
                 init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
                 train_projection_matrix=train_projection_matrix,
+                update_steps = self.update_steps
             )
 
             del module
@@ -139,133 +142,7 @@ class LoQTModel(nn.Module):
             module_suffix = module_name.split(".")[-1]
             setattr(parent, module_suffix, new_module)
 
-         # Register hooks on the model itself
-        self.gradient_step_counter = 0
-        self.register_forward_hook(self._model_pre_forward_hook)
-        #self.register_backward_hook(self._model_backward_hook)
-        self.register_full_backward_hook(self.hook_test)
-
         torch.cuda.empty_cache()
-        
-    def hook_test(self, module, input, output):
-        print("#####")
-        print("test")
-        breakpoint()
-        print("#####")
-
-    def _model_pre_forward_hook(self, module, input, output):
-        # This hook is called at the start of each forward pass of the entire model
-        print("FORWARD HOOK")
-        
-        if self.gradient_step_counter in self.update_steps:
-            dist.barrier()
-            start_time_merge = time.time()
-            torch.cuda.empty_cache()
-            self.merge()
-            torch.cuda.empty_cache()
-
-            if not self.is_single_gpu:
-                dist.barrier()
-                broadcast_parameters(self, 0) # TODO fix local rank here
-            self.set_W_requires_grad(True)
-            
-            end_time_merge = time.time()
-            print("end_time_merge - start_time_merge",end_time_merge - start_time_merge)
-            
-            breakpoint()
-            # loop over all lora linear layers and check if w is required grad and if loraB is required grad
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    assert module.W.weight.requires_grad
-                    assert not module.lora_B.weight.requires_grad
-                    assert not module.lora_A.weight.requires_grad
-                    assert module.lora_params_disabled
-                
-                
-        
-        self.gradient_step_counter +=1
-        print("self.gradient_step_counter",self.gradient_step_counter)
-        
-        
-    def _model_backward_hook(self, module, input, output):
-        # TODO might have to set grads to zeros (return torch.zeros) such that optimizer.step is not messing up things
-        # This hook is called at the end of the backward pass for the entire model
-        print("BACKWARD HOOK")
-        print("self.gradient_step_counter",self.gradient_step_counter)
-        print("(self.gradient_step_counter-1) in self.update_steps",(self.gradient_step_counter-1) in self.update_steps)
-        if (self.gradient_step_counter-1) in self.update_steps:
-            
-            breakpoint()
-            self.reinitialize_LoRA_AB_after_merge()
-            
-            self.set_W_requires_grad(False)
-            if not self.is_single_gpu:
-                dist.barrier()
-                broadcast_parameters(self, 0) # TODO fix local rank here
-            
-            import gc; gc.collect()
-            torch.cuda.empty_cache()
-        
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    assert not module.W.weight.requires_grad
-                    assert module.lora_B.weight.requires_grad
-                    assert module.lora_A.weight.requires_grad
-                    assert not module.lora_params_disabled
-            
-            
-        breakpoint()
-        
-    
-    def install_reset_B_hooks(self):
-        if not self.reset_B_hook_installed:
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    # Forward pre-hook to handle merging before forward pass
-                    module.register_forward_pre_hook(self._check_reset_B_merge_hook)
-                    # Backward hook to handle reinitializing after backward pass
-                    module.register_full_backward_hook(self._check_reset_B_reinitialize_hook)
-            self.reset_B_hook_installed = True
-
-
-    def set_update_steps(self, merge_update_steps, reinitialize_update_steps):
-        self.merge_update_steps = merge_update_steps
-        self.reinitialize_update_steps = reinitialize_update_steps
-
-    #TODO fix memory clean and distributed setting like before we transitioned to hooks
-    def _check_reset_B_merge_hook(self, module, input):
-        # Check if we should reset B
-        if self.gradient_step_counter in self.update_steps:
-            # TODO missing multi gpu support
-            if isinstance(module, LoraLinear):
-                module.merge()
-                module.set_W_requires_grad(True)
-                torch.cuda.empty_cache()
-
-    #TODO fix memory clean and distributed setting like before we transitioned to hooks
-    def _check_reset_B_reinitialize_hook(self, module, input, output):
-        # Increment the counter and check if we need to reset B (second phase)
-        if self.gradient_step_counter in self.update_steps:
-            if isinstance(module, LoraLinear):
-                module.reinitialize_LoRA_AB_after_merge()
-                if self.only_train_lora:
-                    for param in module.parameters():
-                        param.requires_grad = False
-                
-                if isinstance(module, LoraLinear):
-                    module.set_W_requires_grad(False)
-                torch.cuda.empty_cache()
-        print("self.gradient_step_counter",self.gradient_step_counter)
-        self.gradient_step_counter += 1
-
-    def should_reset_B(self):
-        #(update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0) # TODO fix this in computation
-        if self.gradient_step_counter in self.update_steps:
-            return True
-        return False
-            
-    def set_update_steps(self, update_steps):
-        self.update_steps = update_steps
     
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
@@ -471,7 +348,9 @@ class LoraLinear(nn.Module):
             is_single_gpu=False,
             use_eigenh_for_projection=False,
             init_lora_AB_as_random_and_zeros=False,
-            train_projection_matrix=False
+            train_projection_matrix=False,
+            update_steps=[],
+            grad_accumulation_steps=1,
         ):
         super().__init__()
         assert isinstance(W, nn.Linear)
@@ -501,11 +380,67 @@ class LoraLinear(nn.Module):
         self.compensate_quant_error_iterations = compensate_quant_error_iterations
         self.is_single_gpu = is_single_gpu
         self.use_eigenh_for_projection = use_eigenh_for_projection
-        
+        self.update_steps = update_steps,
+        self.grad_accumulation_steps=grad_accumulation_steps
         
         # Determine the method and parameters for projection matrix computation
         self.projection_method = 'eigh' if self.use_eigenh_for_projection else 'svd'
         self.projection_out = 'u' if self.proj_type == 'left' else 'v'
+        
+         # Counter for each LoraLinear layer
+        self.gradient_step_counter = 0
+
+        # Register the forward and backward hooks for this layer
+        self.register_forward_pre_hook(self._forward_pre_hook)
+        self.register_full_backward_hook(self._backward_hook)
+
+    def _forward_pre_hook(self, module, input):
+        """
+        Hook function called before the forward pass.
+        """
+
+        if self.gradient_step_counter in self.update_steps:
+            # Perform the merge operation before the forward pass
+            self.merge()
+            self.set_W_requires_grad(True)
+            #torch.cuda.empty_cache()
+        # Increment the counter and check if we should reset B
+        self.gradient_step_counter += 1
+        
+    def _backward_hook(self, module, grad_input, grad_output):
+        """
+        Hook function that is called after gradients are computed.
+        """
+
+        if (self.gradient_step_counter - self.grad_accumulation_steps) in self.update_steps:
+            self.reinitialize_LoRA_AB_after_merge()
+            self.set_W_requires_grad(False)
+
+            if not self.is_single_gpu:
+                dist.barrier()
+                broadcast_parameters(self, 0)  # Replace 0 with appropriate local rank
+
+            #import gc
+            #gc.collect()
+            #torch.cuda.empty_cache()
+            
+            self.set_all_grads_to_zero() # such that next optimizer.step is ok
+            
+    def set_all_grads_to_zero(self):
+        for module in self.modules():
+            # check if module requires grad or if it is a quantized layer with require_grad_W
+            # if yes set the grad to zeros array
+            if isinstance(module, LoraLinear):
+                module.lora_A.weight.grad = torch.zeros_like(module.lora_A.weight)
+                module.lora_B.weight.grad = torch.zeros_like(module.lora_B.weight)
+                if module.quantize_w == '4bit':
+                    if isinstance(module.W, LinearNF4WithGradient):
+                        module.W.weight_grad = torch.zeros_like(module.W.weight_grad)
+                    else:
+                        module.W.weight.grad = torch.zeros_like(module.W.weight.grad)
+                else:
+                    module.W.weight.grad = torch.zeros_like(module.W.weight.grad)
+            
         
     def validate_inputs(self, W, proj_type):
         if not isinstance(W, nn.Linear):
@@ -712,7 +647,6 @@ class LoraLinear(nn.Module):
     def set_W_requires_grad(self, requires_grad):
         # Reset gradient for W as it's not tracked by optimizer.
         self.W.weight.grad = None
-        print("set set_W_requires_grad", requires_grad)
         # Handle quantization-specific settings
         if self.quantize_w == '4bit':
             if isinstance(self.W, LinearNF4WithGradient):
