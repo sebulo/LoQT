@@ -587,8 +587,17 @@ def main(args):
             continue
  
         global_step += 1
-        local_step += 1                
-
+        local_step += 1
+        
+        # should_reset_B = (
+        #     args.use_loqt and 
+        #     update_step in update_steps and
+        #     global_step % args.gradient_accumulation == 0 and
+        #     (
+        #         (update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0)
+        #     )  # do not merge in last step before final eval. Only if first merge ste
+        # )
+        
         if update_step > args.num_training_steps:
             logger.info(f"Reached max number of update steps (f{args.num_training_steps}). Stopping training.")
             print(f"Rank {global_rank} stopping training.")
@@ -611,12 +620,8 @@ def main(args):
         loss = model(**batch, labels=labels).loss
 
         scaled_loss = loss / args.gradient_accumulation
-        print("before backward")
-        breakpoint()
         scaled_loss.backward()
         
-        breakpoint()
-        print("after backward")
         
         if global_rank==0 and args.log_max_memory and update_step > 0 and update_step % args.log_max_memory_steps == 0:
             gpu_metrics = get_gpu_metrics_nvitop(this_process, suffix='_after_backward')
@@ -627,9 +632,9 @@ def main(args):
             pbar.set_description(f"Update steps, loss: {loss.item():.4f}")                
                 
         # TODO add to lora Linear?
-        #if global_step % args.gradient_accumulation != 0:
-        #    assert not should_reset_B
-        #    continue
+        if global_step % args.gradient_accumulation != 0:
+            continue
+            #    assert not should_reset_B
 
         # add grad clipping
         if args.grad_clipping != 0.0: torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clipping)
@@ -637,14 +642,14 @@ def main(args):
         if global_rank == 0: pbar.update(1)
         
         
-        if not layer_wise_flag:
+        if not layer_wise_flag:# and not should_reset_B:
             optimizer.step()
             scheduler.step()
                 
             if global_rank==0 and args.log_max_memory and update_step > 0 and update_step % args.log_max_memory_steps == 0:
                 gpu_metrics = get_gpu_metrics_nvitop(this_process, suffix='_after_optimizer_step')
                 metrics_to_log.update(gpu_metrics)
-            
+        
             optimizer.zero_grad()
     
         update_step += 1

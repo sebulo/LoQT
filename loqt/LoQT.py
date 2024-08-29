@@ -143,10 +143,15 @@ class LoQTModel(nn.Module):
         self.gradient_step_counter = 0
         self.register_forward_hook(self._model_pre_forward_hook)
         #self.register_backward_hook(self._model_backward_hook)
-        self.register_full_backward_hook(self._model_backward_hook)
+        self.register_full_backward_hook(self.hook_test)
 
         torch.cuda.empty_cache()
         
+    def hook_test(self, module, input, output):
+        print("#####")
+        print("test")
+        breakpoint()
+        print("#####")
 
     def _model_pre_forward_hook(self, module, input, output):
         # This hook is called at the start of each forward pass of the entire model
@@ -166,20 +171,31 @@ class LoQTModel(nn.Module):
             
             end_time_merge = time.time()
             print("end_time_merge - start_time_merge",end_time_merge - start_time_merge)
+            
+            breakpoint()
+            # loop over all lora linear layers and check if w is required grad and if loraB is required grad
+            for module in self.modules():
+                if isinstance(module, LoraLinear):
+                    assert module.W.weight.requires_grad
+                    assert not module.lora_B.weight.requires_grad
+                    assert not module.lora_A.weight.requires_grad
+                    assert module.lora_params_disabled
+                
+                
         
         self.gradient_step_counter +=1
-        
         print("self.gradient_step_counter",self.gradient_step_counter)
         
         
     def _model_backward_hook(self, module, input, output):
+        # TODO might have to set grads to zeros (return torch.zeros) such that optimizer.step is not messing up things
         # This hook is called at the end of the backward pass for the entire model
         print("BACKWARD HOOK")
         print("self.gradient_step_counter",self.gradient_step_counter)
         print("(self.gradient_step_counter-1) in self.update_steps",(self.gradient_step_counter-1) in self.update_steps)
-        breakpoint()
         if (self.gradient_step_counter-1) in self.update_steps:
-        
+            
+            breakpoint()
             self.reinitialize_LoRA_AB_after_merge()
             
             self.set_W_requires_grad(False)
@@ -189,7 +205,17 @@ class LoQTModel(nn.Module):
             
             import gc; gc.collect()
             torch.cuda.empty_cache()
+        
+            for module in self.modules():
+                if isinstance(module, LoraLinear):
+                    assert not module.W.weight.requires_grad
+                    assert module.lora_B.weight.requires_grad
+                    assert module.lora_A.weight.requires_grad
+                    assert not module.lora_params_disabled
+            
+            
         breakpoint()
+        
     
     def install_reset_B_hooks(self):
         if not self.reset_B_hook_installed:
@@ -530,7 +556,7 @@ class LoraLinear(nn.Module):
             self.lora_A.weight.requires_grad = flag
             self.lora_B.weight.requires_grad = flag
             self.lora_params_disabled = False
-        elif flag:
+        elif flag is True: # had problems if just saying elif flag TODO
             # Set requires_grad for LoRA layers based on the projection type
             if self.proj_type == 'left': 
                 self.lora_A.weight.requires_grad = False
@@ -649,7 +675,7 @@ class LoraLinear(nn.Module):
     @torch.no_grad()
     def merge(self):
         self.maybe_dequantize_LoRA_factors()  # Dequantizes lora_A and lora_B if quantized
-        
+
         if not self.is_single_gpu:
             # Perform distributed averaging to ensure a consistent state across all nodes
             dist.all_reduce(self.lora_A.weight.data, op=dist.ReduceOp.AVG) 
@@ -686,7 +712,7 @@ class LoraLinear(nn.Module):
     def set_W_requires_grad(self, requires_grad):
         # Reset gradient for W as it's not tracked by optimizer.
         self.W.weight.grad = None
-
+        print("set set_W_requires_grad", requires_grad)
         # Handle quantization-specific settings
         if self.quantize_w == '4bit':
             if isinstance(self.W, LinearNF4WithGradient):

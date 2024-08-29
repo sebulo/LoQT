@@ -18,6 +18,7 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main_hook.py \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
     --save_original_model True \
+    --only_train_lora True \
     --name 60m_LoQT
     #--quantize_w '4bit' \
     #--quantize_projection_matrix '4bit' \
