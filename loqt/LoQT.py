@@ -13,6 +13,8 @@ import copy
 import time
 import torch.distributed as dist
 from loqt.utils import broadcast_parameters
+from collections import OrderedDict
+from typing import Dict, Callable
 
 @dataclass
 class LoQT_Config:
@@ -142,7 +144,25 @@ class LoQTModel(nn.Module):
             module_suffix = module_name.split(".")[-1]
             setattr(parent, module_suffix, new_module)
 
+        # Register a forward hook on the model to increment the gradient step counter
+        self.gradient_step_counter=0
+        self.register_forward_hook(self._increment_step_counter)
         torch.cuda.empty_cache()
+        
+        
+    def _increment_step_counter(self, module, input, output):
+        """
+        Increment the global gradient step counter and register hooks on LoraLinear layers
+        if the current step is in the update_steps.
+        """
+        
+        if self.gradient_step_counter in self.update_steps:
+            print(f"Gradient step {self.gradient_step_counter} is in update_steps, registering hooks.")
+            for module in self.modules():
+                if isinstance(module, LoraLinear):
+                    module.register_forward_pre_hook(module._forward_pre_hook)
+                    module.register_full_backward_hook(module._backward_hook)
+        self.gradient_step_counter += 1
     
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
@@ -382,37 +402,58 @@ class LoraLinear(nn.Module):
         self.use_eigenh_for_projection = use_eigenh_for_projection
         self.update_steps = update_steps,
         self.grad_accumulation_steps=grad_accumulation_steps
+        self.grad_acc_counter = 0
         
         # Determine the method and parameters for projection matrix computation
         self.projection_method = 'eigh' if self.use_eigenh_for_projection else 'svd'
         self.projection_out = 'u' if self.proj_type == 'left' else 'v'
         
          # Counter for each LoraLinear layer
-        self.gradient_step_counter = 0
 
         # Register the forward and backward hooks for this layer
-        self.register_forward_pre_hook(self._forward_pre_hook)
-        self.register_full_backward_hook(self._backward_hook)
+        #self.register_forward_pre_hook(self._forward_pre_hook)
+        #self.register_full_backward_hook(self._backward_hook)
+        
+    def attach_hooks(self):
+        """
+        Attach forward and backward hooks to the layer.
+        """
+        self.forward_hook_handle = self.register_forward_pre_hook(self._forward_pre_hook)
+        self.backward_hook_handle = self.register_full_backward_hook(self._backward_hook)
+        
+    def remove_hooks(self):
+        """
+        Remove all hooks from this layer.
+        """
+        if hasattr(self, '_forward_hooks'):
+            self._forward_hooks: Dict[int, Callable] = OrderedDict()
+        if hasattr(self, '_forward_pre_hooks'):
+            self._forward_pre_hooks: Dict[int, Callable] = OrderedDict()
+        if hasattr(self, '_backward_hooks'):
+            self._backward_hooks: Dict[int, Callable] = OrderedDict()
+            
+        self.grad_acc_counter = 0
+
 
     def _forward_pre_hook(self, module, input):
         """
         Hook function called before the forward pass.
+        Merge and require grad for W
         """
 
-        if self.gradient_step_counter in self.update_steps:
-            # Perform the merge operation before the forward pass
+        # Perform the merge operation before the forward pass
+        if self.grad_acc_counter == 0:
             self.merge()
             self.set_W_requires_grad(True)
-            #torch.cuda.empty_cache()
-        # Increment the counter and check if we should reset B
-        self.gradient_step_counter += 1
+        self.grad_acc_counter += 1
+        
         
     def _backward_hook(self, module, grad_input, grad_output):
         """
         Hook function that is called after gradients are computed.
+        Reinitialize AB 
         """
-
-        if (self.gradient_step_counter - self.grad_accumulation_steps) in self.update_steps:
+        if self.grad_acc_counter == self.grad_accumulation_steps:
             self.reinitialize_LoRA_AB_after_merge()
             self.set_W_requires_grad(False)
 
@@ -426,6 +467,9 @@ class LoraLinear(nn.Module):
             
             self.set_all_grads_to_zero() # such that next optimizer.step is ok
             
+        # Detach hooks after execution
+        self.remove_hooks()
+            
     def set_all_grads_to_zero(self):
         for module in self.modules():
             # check if module requires grad or if it is a quantized layer with require_grad_W
@@ -438,7 +482,7 @@ class LoraLinear(nn.Module):
                         module.W.weight_grad = torch.zeros_like(module.W.weight_grad)
                     else:
                         module.W.weight.grad = torch.zeros_like(module.W.weight.grad)
-                else:
+                elif module.W.weight.grad: 
                     module.W.weight.grad = torch.zeros_like(module.W.weight.grad)
             
         
@@ -532,6 +576,8 @@ class LoraLinear(nn.Module):
     def forward(self, X):
         if self.lora_params_disabled:
             return self.W(X)
+        
+        
         
         W_output = self.W(X) 
         
