@@ -144,25 +144,8 @@ class LoQTModel(nn.Module):
             module_suffix = module_name.split(".")[-1]
             setattr(parent, module_suffix, new_module)
 
-        # Register a forward hook on the model to increment the gradient step counter
-        self.gradient_step_counter=0
-        self.register_forward_hook(self._increment_step_counter)
         torch.cuda.empty_cache()
         
-        
-    def _increment_step_counter(self, module, input, output):
-        """
-        Increment the global gradient step counter and register hooks on LoraLinear layers
-        if the current step is in the update_steps.
-        """
-        
-        if self.gradient_step_counter in self.update_steps:
-            print(f"Gradient step {self.gradient_step_counter} is in update_steps, registering hooks.")
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    module.register_forward_pre_hook(module._forward_pre_hook)
-                    module.register_full_backward_hook(module._backward_hook)
-        self.gradient_step_counter += 1
     
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
@@ -403,16 +386,28 @@ class LoraLinear(nn.Module):
         self.update_steps = update_steps,
         self.grad_accumulation_steps=grad_accumulation_steps
         self.grad_acc_counter = 0
+        self.grad_step_counter = 0
         
         # Determine the method and parameters for projection matrix computation
         self.projection_method = 'eigh' if self.use_eigenh_for_projection else 'svd'
         self.projection_out = 'u' if self.proj_type == 'left' else 'v'
         
-         # Counter for each LoraLinear layer
-
-        # Register the forward and backward hooks for this layer
-        #self.register_forward_pre_hook(self._forward_pre_hook)
-        #self.register_full_backward_hook(self._backward_hook)
+        # start by attaching hooks
+        self.attach_hooks()
+        
+    def _increment_step_counter(self, module, input, output):
+        """
+        Increment the global gradient step counter and register hooks on LoraLinear layers
+        if the current step is in the update_steps.
+        """
+        
+        if self.gradient_step_counter in self.update_steps:
+            print(f"Gradient step {self.gradient_step_counter} is in update_steps, registering hooks.")
+            for module in self.modules():
+                if isinstance(module, LoraLinear):
+                    module.register_forward_pre_hook(module._forward_pre_hook)
+                    module.register_full_backward_hook(module._backward_hook)
+        self.gradient_step_counter += 1
         
     def attach_hooks(self):
         """
@@ -578,12 +573,16 @@ class LoraLinear(nn.Module):
             return self.W(X)
         
         
-        
         W_output = self.W(X) 
         
         lora_A_output = self.lora_A(X)
         lora_output = self.lora_B(lora_A_output)
         
+        self.grad_step_counter += 1
+        if self.grad_step_counter in self.update_steps:
+            print(f"Gradient step {self.gradient_step_counter} is in update_steps, registering hooks.")
+            self.attach_hooks()
+            
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
         return W_output + (self.scaling*lora_output)
     

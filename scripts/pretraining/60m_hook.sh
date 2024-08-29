@@ -6,11 +6,11 @@ torchrun --standalone --nproc_per_node 1 --nnodes 1 torchrun_main_hook.py \
     --rank 128 \
     --lora_alpha 0.4 \
     --update_proj_gap 100 \
-    --batch_size 512 \
-    --total_batch_size 512 \
+    --batch_size 256 \
+    --total_batch_size 256 \
     --num_training_steps 10000 \
     --warmup_steps 1000 \
-    --eval_every 1000 \
+    --eval_every 100 \
     --save_every 1000 \
     --dtype bfloat16 \
     --optimizer adamw \
