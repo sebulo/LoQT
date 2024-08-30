@@ -16,6 +16,9 @@ from loqt.utils import broadcast_parameters
 from collections import OrderedDict
 from typing import Dict, Callable
 
+# Global variable to store the cumulative time for merge operations
+cumulative_merge_time = 0.0
+
 @dataclass
 class LoQT_Config:
     target_modules: List[str]
@@ -145,7 +148,6 @@ class LoQTModel(nn.Module):
             setattr(parent, module_suffix, new_module)
 
         torch.cuda.empty_cache()
-        
     
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
@@ -331,6 +333,11 @@ class LoQTModel(nn.Module):
         print(f"Float32 params: {num_float32_params}, BFloat16 params: {num_bfloat16_params}, Int8 params: {num_int8_params}")
         return total_MB
 
+    def print_and_reset_cumulative_merge_time(self):
+        global cumulative_merge_time
+        print(f"Total time for merge operations: {cumulative_merge_time:.4f} seconds")
+        cumulative_merge_time = 0.0  # Reset for the next iteration
+
 
     
 class LoraLinear(nn.Module):
@@ -387,6 +394,7 @@ class LoraLinear(nn.Module):
         self.grad_accumulation_steps=grad_accumulation_steps
         self.grad_acc_counter = 0
         self.grad_step_counter = 0
+        
         
         # Determine the method and parameters for projection matrix computation
         self.projection_method = 'eigh' if self.use_eigenh_for_projection else 'svd'
@@ -708,10 +716,17 @@ class LoraLinear(nn.Module):
             self.W.bias.requires_grad = True
     
     def reinitialize_LoRA_AB_after_merge(self):
+        global cumulative_merge_time
+        
+        time_start = time.time()
         if self.init_lora_AB_as_random_and_zeros:
             self.initialize_LoRA_AB_random_and_zero()
         else:
             self.init_LoRA_with_gradient_projections()
+                
+        time_end = time.time()  # End timing
+        # Update the global cumulative merge time
+        cumulative_merge_time += time_end - time_start
             
     def initialize_LoRA_AB_random_and_zero(self):
         if self.proj_type == 'left':

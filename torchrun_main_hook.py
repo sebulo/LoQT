@@ -591,6 +591,9 @@ def main(args):
         global_step += 1
         local_step += 1
         
+        if (update_step - 1) in update_steps: 
+            get_model(model).print_and_reset_cumulative_merge_time() # culmulative time was saved in the previous iteration
+        
         if update_step > args.num_training_steps:
             logger.info(f"Reached max number of update steps (f{args.num_training_steps}). Stopping training.")
             print(f"Rank {global_rank} stopping training.")
@@ -624,16 +627,13 @@ def main(args):
         
             pbar.set_description(f"Update steps, loss: {loss.item():.4f}")                
                 
-        # TODO add to lora Linear?
         if global_step % args.gradient_accumulation != 0:
             continue
-            #    assert not should_reset_B
 
         # add grad clipping
         if args.grad_clipping != 0.0: torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clipping)
 
         if global_rank == 0: pbar.update(1)
-        
         
         if not layer_wise_flag:# and not should_reset_B:
             optimizer.step()
