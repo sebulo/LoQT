@@ -406,6 +406,7 @@ class LoraLinear(nn.Module):
         """
         Remove all hooks from this layer.
         """
+        #breakpoint()
         if hasattr(self, '_forward_hooks'):
             self._forward_hooks: Dict[int, Callable] = OrderedDict()
         if hasattr(self, '_forward_pre_hooks'):
@@ -565,7 +566,8 @@ class LoraLinear(nn.Module):
         lora_A_output = self.lora_A(X)
         lora_output = self.lora_B(lora_A_output)
         
-        self.grad_step_counter += 1
+        if self.training: # should not count in eval step
+            self.grad_step_counter += 1
         if self.grad_step_counter in self.update_steps:
             #print(f"Gradient step {self.grad_step_counter} is in update_steps, registering hooks.")
             self.attach_hooks()

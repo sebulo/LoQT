@@ -221,6 +221,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
     if is_training_at_entry:
         model.train()
+        print("Set to Train again")
     return total_loss, evaluated_on_tokens
 
 
