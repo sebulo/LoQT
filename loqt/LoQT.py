@@ -383,7 +383,7 @@ class LoraLinear(nn.Module):
         self.compensate_quant_error_iterations = compensate_quant_error_iterations
         self.is_single_gpu = is_single_gpu
         self.use_eigenh_for_projection = use_eigenh_for_projection
-        self.update_steps = update_steps,
+        self.update_steps = update_steps
         self.grad_accumulation_steps=grad_accumulation_steps
         self.grad_acc_counter = 0
         self.grad_step_counter = 0
@@ -394,20 +394,6 @@ class LoraLinear(nn.Module):
         
         # start by attaching hooks
         self.attach_hooks()
-        
-    def _increment_step_counter(self, module, input, output):
-        """
-        Increment the global gradient step counter and register hooks on LoraLinear layers
-        if the current step is in the update_steps.
-        """
-        
-        if self.gradient_step_counter in self.update_steps:
-            print(f"Gradient step {self.gradient_step_counter} is in update_steps, registering hooks.")
-            for module in self.modules():
-                if isinstance(module, LoraLinear):
-                    module.register_forward_pre_hook(module._forward_pre_hook)
-                    module.register_full_backward_hook(module._backward_hook)
-        self.gradient_step_counter += 1
         
     def attach_hooks(self):
         """
@@ -449,6 +435,7 @@ class LoraLinear(nn.Module):
         Reinitialize AB 
         """
         if self.grad_acc_counter == self.grad_accumulation_steps:
+            
             self.reinitialize_LoRA_AB_after_merge()
             self.set_W_requires_grad(False)
 
@@ -460,7 +447,7 @@ class LoraLinear(nn.Module):
             #gc.collect()
             #torch.cuda.empty_cache()
             
-            self.set_all_grads_to_zero() # such that next optimizer.step is ok
+            self.set_all_grads_to_zero() # such that next optimizer.step has no effect
             
         # Detach hooks after execution
         self.remove_hooks()
@@ -580,7 +567,7 @@ class LoraLinear(nn.Module):
         
         self.grad_step_counter += 1
         if self.grad_step_counter in self.update_steps:
-            print(f"Gradient step {self.gradient_step_counter} is in update_steps, registering hooks.")
+            #print(f"Gradient step {self.grad_step_counter} is in update_steps, registering hooks.")
             self.attach_hooks()
             
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
@@ -736,7 +723,7 @@ class LoraLinear(nn.Module):
         #Either it is a linear layer and has requires_grad or it is a quantized (bnb) layer and has require_grad_W
         self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
         self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
-        
+
         assert isinstance(self.W, nn.Linear) or self.W.require_grad_W 
         #TODO ensure this is correct wrt W being transposed or not
         if isinstance(self.W, LinearNF4WithGradient):
