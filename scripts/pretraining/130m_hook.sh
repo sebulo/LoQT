@@ -17,29 +17,26 @@ nvidia-smi
 eval "$(conda shell.bash hook)"
 conda activate loqt
 
-# --nproc_per_node 1 is number of GPUs per node
-torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main_hook.py \
-    --model_config configs/llama_60m.json \
+# --nproc_per_node 2 is number of GPUs per node
+torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
+    --model_config configs/llama_130m.json \
     --seed 42 \
     --lr 0.01 \
-    --rank 128 \
-    --lora_alpha 0.4 \
+    --rank 256 \
+    --lora_alpha 0.5 \
     --update_proj_gap 100 \
     --batch_size 256 \
     --total_batch_size 512 \
-    --num_training_steps 10000 \
-    --warmup_steps 1000 \
-    --eval_every 1000 \
+    --num_training_steps 20000 \
+    --warmup_steps 2000 \
+    --eval_every 2000 \
     --save_every 10000 \
     --dtype bfloat16 \
     --optimizer adamw \
     --use_loqt True\
+    --quantize_w '4bit' \
+    --quantize_projection_matrix '4bit' \
+    --compensate_quant_error_iterations 5 \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
-    --use_eigenh_for_projection True \
-    --save_original_model False \
-    --only_train_lora False \
-    --name 60m_LoQT
-    # --quantize_w '4bit' \
-    # --quantize_projection_matrix '4bit' \
-    # --compensate_quant_error_iterations 5 \
+    --name 130m_LoQT

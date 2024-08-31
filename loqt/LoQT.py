@@ -334,9 +334,10 @@ class LoQTModel(nn.Module):
         return total_MB
 
     def print_and_reset_cumulative_merge_time(self):
-        global cumulative_merge_time
-        print(f"Total time for merge operations: {cumulative_merge_time:.4f} seconds")
-        cumulative_merge_time = 0.0  # Reset for the next iteration
+        if dist.get_rank() == 0:
+            global cumulative_merge_time
+            print(f"Total time for merge operations: {cumulative_merge_time:.4f} seconds")
+            cumulative_merge_time = 0.0  # Reset for the next iteration
 
 
     
@@ -411,17 +412,9 @@ class LoraLinear(nn.Module):
         self.backward_hook_handle = self.register_full_backward_hook(self._backward_hook)
         
     def remove_hooks(self):
-        """
-        Remove all hooks from this layer.
-        """
-        #breakpoint()
-        if hasattr(self, '_forward_hooks'):
-            self._forward_hooks: Dict[int, Callable] = OrderedDict()
-        if hasattr(self, '_forward_pre_hooks'):
-            self._forward_pre_hooks: Dict[int, Callable] = OrderedDict()
-        if hasattr(self, '_backward_hooks'):
-            self._backward_hooks: Dict[int, Callable] = OrderedDict()
-            
+        self._forward_hooks: Dict[int, Callable] = OrderedDict()
+        self._forward_pre_hooks: Dict[int, Callable] = OrderedDict()
+        self._backward_hooks: Dict[int, Callable] = OrderedDict()
         self.grad_acc_counter = 0
 
 
@@ -568,7 +561,6 @@ class LoraLinear(nn.Module):
         if self.lora_params_disabled:
             return self.W(X)
         
-        
         W_output = self.W(X) 
         
         lora_A_output = self.lora_A(X)
@@ -577,7 +569,6 @@ class LoraLinear(nn.Module):
         if self.training: # should not count in eval step
             self.grad_step_counter += 1
         if self.grad_step_counter in self.update_steps:
-            #print(f"Gradient step {self.grad_step_counter} is in update_steps, registering hooks.")
             self.attach_hooks()
             
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
