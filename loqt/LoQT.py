@@ -443,14 +443,14 @@ class LoraLinear(nn.Module):
         Hook function that is called after gradients are computed.
         Reinitialize AB 
         """
+        
         if self.grad_acc_counter == self.grad_accumulation_steps:
-            
             self.reinitialize_LoRA_AB_after_merge()
             self.set_W_requires_grad(False)
 
             if not self.is_single_gpu:
                 dist.barrier()
-                broadcast_parameters(self, 0)  # Replace 0 with appropriate local rank
+                broadcast_parameters(self, dist.get_rank())  # Replace 0 with appropriate local rank
 
             #import gc
             #gc.collect()
@@ -683,6 +683,7 @@ class LoraLinear(nn.Module):
                 self.W.weight.data, self.W.weight.quant_state = bnb_F.quantize_4bit(new_W, quant_type=self.bnb_4bit_quant_type)
                 del new_W
                 del W_deq
+                
         torch.cuda.synchronize()
 
         
