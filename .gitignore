@@ -188,3 +188,5 @@ scripts/tests/test_checkpoints
 # ignore all starting with ssh_
 ssh_*
 .vscode/launch.json
+
+scripts/pretraining/p1

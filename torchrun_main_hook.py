@@ -166,7 +166,7 @@ def load_model(args, cache_dir):
     return model, model_config
 
 @torch.no_grad()
-def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None):
+def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None,  is_icelandic_dataset=False):
     is_training_at_entry = model.training
     model.eval()
     _time = time.time()
@@ -182,7 +182,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
     # C4 values
     remove_columns = ["text", "timestamp", "url"]
-    if dataset is not None:
+    if is_icelandic_dataset:
         # Hard coded for the icelandic dataset
         remove_columns = ['prefix', 'source', 'target', 'origin', 'text']
     
@@ -196,7 +196,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     target_eval_tokens = args.num_eval_tokens
     evaluated_on_tokens = 0
     total_loss = torch.tensor(0.0).to(device)
-    total_batches = 0
+    total_batches = 1 # should be 0 but galore uses 1
     logger.info(f"Eval set prepared in {time.time() - _time:.2f} seconds")
 
     for batch in val_data_mapped.batch(batch_size=batch_size):
@@ -212,7 +212,8 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
         evaluated_on_tokens += (batch["input_ids"] != pad_idx).sum().item() * world_size
 
-    total_loss = total_loss / max(total_batches, 1)
+    #total_loss = total_loss / max(total_batches, 1) #  should be like this but galore uses term below
+    total_loss = total_loss / total_batches
 
     # Gather losses across all GPUs
     gathered_losses = [torch.zeros_like(total_loss) for _ in range(world_size)]
@@ -221,7 +222,6 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
     if is_training_at_entry:
         model.train()
-        print("Set to Train again")
     return total_loss, evaluated_on_tokens
 
 

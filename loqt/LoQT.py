@@ -424,8 +424,6 @@ class LoraLinear(nn.Module):
         Merge and require grad for W
         """
 
-
-        print(f'FORWARD self.grad_acc_counter {self.grad_acc_counter}, self.grad_accumulation_steps {self.grad_accumulation_steps}')
         # Perform the merge operation before the forward pass
         if self.grad_acc_counter == 0:
             self.merge()
