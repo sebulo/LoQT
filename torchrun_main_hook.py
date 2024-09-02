@@ -274,7 +274,7 @@ def main(args):
     if args.total_batch_size is not None:
         if args.gradient_accumulation is None:
             assert args.total_batch_size % world_size == 0, "total_batch_size must be divisible by world_size"
-            args.gradient_accumulation = args.total_batch_size // (args.batch_size * world_size)
+            args.gradient_accumulation = args.total_batch_size // (args.batch_size * world_size) # for bs 256 bsz and 512 tbsz and 2 gpus this is 1
             assert args.gradient_accumulation > 0, "gradient_accumulation must be greater than 0"
 
     assert args.gradient_accumulation * args.batch_size * world_size == args.total_batch_size, \

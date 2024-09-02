@@ -424,6 +424,8 @@ class LoraLinear(nn.Module):
         Merge and require grad for W
         """
 
+
+        print(f'FORWARD self.grad_acc_counter {self.grad_acc_counter}, self.grad_accumulation_steps {self.grad_accumulation_steps}')
         # Perform the merge operation before the forward pass
         if self.grad_acc_counter == 0:
             self.merge()
@@ -436,7 +438,7 @@ class LoraLinear(nn.Module):
         Hook function that is called after gradients are computed.
         Reinitialize AB 
         """
-        
+
         if self.grad_acc_counter == self.grad_accumulation_steps:
             self.reinitialize_LoRA_AB_after_merge()
             self.set_W_requires_grad(False)
@@ -451,8 +453,8 @@ class LoraLinear(nn.Module):
             
             self.set_all_grads_to_zero() # such that next optimizer.step has no effect
             
-        # Detach hooks after execution
-        self.remove_hooks()
+            # Detach hooks after execution
+            self.remove_hooks()
             
     def set_all_grads_to_zero(self):
         for module in self.modules():
@@ -568,9 +570,7 @@ class LoraLinear(nn.Module):
         
         if self.training: # should not count in eval step
             self.grad_step_counter += 1
-            print(f"Grad step counter: {self.grad_step_counter}")
         if self.grad_step_counter in self.update_steps:
-            print(f"Rank {dist.get_rank()} - A shape: {self.lora_A.weight.shape}, B shape: {self.lora_B.weight.shape}")
             self.attach_hooks()
             
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
@@ -644,12 +644,7 @@ class LoraLinear(nn.Module):
     
     @torch.no_grad()
     def merge(self):
-        # print rank and shapes of A and B # name of layer
-        print(f"Rank {dist.get_rank()} - A shape: {self.lora_A.weight.shape}, B shape: {self.lora_B.weight.shape}")
-        
         self.maybe_dequantize_LoRA_factors()  # Dequantizes lora_A and lora_B if quantized
-        print(f"AFter Dec")
-        print(f"Rank {dist.get_rank()} - A shape: {self.lora_A.weight.shape}, B shape: {self.lora_B.weight.shape}")
 
         if not self.is_single_gpu:
             # Perform distributed averaging to ensure a consistent state across all nodes
@@ -658,8 +653,6 @@ class LoraLinear(nn.Module):
             dist.barrier() # synchronization point where all processes must arrive before any can proceed. 
             
         AB = self.scaling*(self.lora_A.weight.T @ self.lora_B.weight.T).T.detach()  # Multiply and transpose to match dimensions
-        
-        
         
         # LoRA params not neeeded before init_B is called - make small placeholder tensors
         self.lora_A.weight.data = torch.ones((1,1), device=self.device, dtype=self.compute_dtype)
@@ -685,7 +678,6 @@ class LoraLinear(nn.Module):
                 del W_deq
                 
         torch.cuda.synchronize()
-
         
     def set_W_requires_grad(self, requires_grad):
         # Reset gradient for W as it's not tracked by optimizer.
@@ -719,7 +711,6 @@ class LoraLinear(nn.Module):
     def reinitialize_LoRA_AB_after_merge(self):
         global cumulative_merge_time
         
-        print(f"Rank {dist.get_rank()} - Reinitializing LoRA A and B after merge")
         time_start = time.time()
         if self.init_lora_AB_as_random_and_zeros:
             self.initialize_LoRA_AB_random_and_zero()

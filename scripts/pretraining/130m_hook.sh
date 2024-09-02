@@ -18,7 +18,7 @@ eval "$(conda shell.bash hook)"
 conda activate loqt
 
 # --nproc_per_node 2 is number of GPUs per node
-torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
+torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main_hook.py \
     --model_config configs/llama_130m.json \
     --seed 42 \
     --lr 0.01 \
