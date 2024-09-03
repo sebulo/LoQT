@@ -31,7 +31,7 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
 
     random.seed(0)
     valenc = []
-    for _ in range(32):
+    for _ in range(256):
         while True:
             i = random.randint(0, len(valdata) - 1)
             tmp = tokenizer(valdata[i]['text'], return_tensors='pt')
@@ -47,7 +47,7 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         'text': [x[0] for x in trainloader],
         'labels': [x[1] for x in trainloader]
     })
-    print(valenc)
+    # print(valenc)
     # De-tokenize valenc and get the text
     # valenc_text = [tokenizer.decode(v.tolist(), skip_special_tokens=True) for q in for v in valenc]
         # De-tokenize valenc and get the text
@@ -60,12 +60,13 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
     # valenc_text = [tokenizer.decode(token_id, skip_special_tokens=True) 
     #                for v in valenc for token_id in v.tolist()[0]]
     val_dataset = Dataset.from_dict({'text': sequence_list})
+    val_dataset.save_to_disk("val_dataset_transformed")
     print(val_dataset)
     print(f"elem1 valdataset_constructed: {val_dataset[0]}")
     return train_dataset, val_dataset
 
-tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neo-2.7B", model_max_length=10000)
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", model_max_length=20000)
 n_samples = 128
-seed = 2
-seqlen = 128
+seed = 0
+seqlen = 2048
 dataset = get_c4(tokenizer, n_samples, seed, seqlen)
