@@ -446,6 +446,8 @@ class LoraLinear(nn.Module):
         Reinitialize AB 
         """
 
+        print('self.grad_acc_counter',self.grad_acc_counter)
+        print('self.grad_accumulation_steps',self.grad_accumulation_steps)
         if self.grad_acc_counter == self.grad_accumulation_steps:
             self.reinitialize_LoRA_AB_after_merge()
             self.set_W_requires_grad(False)
@@ -567,6 +569,11 @@ class LoraLinear(nn.Module):
         return lora_A, lora_B
     
     def forward(self, X):
+        if self.training: # should not count in eval step
+            self.grad_step_counter += 1
+            if self.grad_step_counter in self.update_steps:
+                self.attach_hooks()
+                
         if self.lora_params_disabled:
             return self.W(X)
         
@@ -575,10 +582,6 @@ class LoraLinear(nn.Module):
         lora_A_output = self.lora_A(X)
         lora_output = self.lora_B(lora_A_output)
         
-        if self.training: # should not count in eval step
-            self.grad_step_counter += 1
-            if self.grad_step_counter in self.update_steps:
-                self.attach_hooks()
             
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
         return W_output + (self.scaling*lora_output)
