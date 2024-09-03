@@ -234,6 +234,11 @@ def main(args):
     global_rank = int(os.environ['RANK'])
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    
+    if world_size == 1:
+        print('Setting sinlge_gpu Flag')
+        args.single_gpu = True
+    
     print(f"global_rank {global_rank}, local_rank {local_rank}, world_size {world_size}")
     
     # if args.use_offloading:
@@ -276,6 +281,7 @@ def main(args):
             assert args.total_batch_size % world_size == 0, "total_batch_size must be divisible by world_size"
             args.gradient_accumulation = args.total_batch_size // (args.batch_size * world_size) # for bs 256 bsz and 512 tbsz and 2 gpus this is 1
             assert args.gradient_accumulation > 0, "gradient_accumulation must be greater than 0"
+        print('gradient_accumulation',args.gradient_accumulation)
 
     assert args.gradient_accumulation * args.batch_size * world_size == args.total_batch_size, \
         "gradient_accumulation * batch_size * world_size must be equal to total_batch_size"
@@ -390,6 +396,7 @@ def main(args):
             train_projection_matrix=args.train_projection_matrix,
             only_train_lora=args.only_train_lora,
             update_steps=update_steps,
+            grad_accumulation_steps = args.gradient_accumulation
         )
         if args.only_train_lora:
             args.use_loqt=False # make sure not to update weights 

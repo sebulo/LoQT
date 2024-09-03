@@ -37,6 +37,8 @@ class LoQT_Config:
     use_eigenh_for_projection: bool = False
     init_lora_AB_as_random_and_zeros: bool = False
     train_projection_matrix: bool = False
+    grad_accumulation_steps: int = 0
+    
 
 class LoQTModel(nn.Module):
     def __init__(
@@ -62,7 +64,8 @@ class LoQTModel(nn.Module):
         use_eigenh_for_projection=False,
         init_lora_AB_as_random_and_zeros=False,
         train_projection_matrix=False,
-        update_steps=[]
+        update_steps=[],
+        grad_accumulation_steps = 0,
     ):
         if r <= 0:
             raise ValueError("r must be positive. If you want r == 0, use the original model.")
@@ -87,7 +90,10 @@ class LoQTModel(nn.Module):
         self.use_eigenh_for_projection = use_eigenh_for_projection
         self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
         self.train_projection_matrix = train_projection_matrix
-        self.update_steps = update_steps
+        self.grad_accumulation_steps = grad_accumulation_steps
+        self.update_steps = [u*grad_accumulation_steps for u in update_steps]
+        print('grad_accumulation_steps: ', grad_accumulation_steps)
+        print('Update steps adjusted by gradient accumulation: ', self.update_steps)
         
         # Initialize the configuration with the given parameters
         self._config = LoQT_Config(
@@ -106,7 +112,9 @@ class LoQTModel(nn.Module):
             only_train_lora = only_train_lora,
             use_eigenh_for_projection=use_eigenh_for_projection,
             init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
-            train_projection_matrix=train_projection_matrix
+            train_projection_matrix=train_projection_matrix,
+            grad_accumulation_steps = self.grad_accumulation_steps
+            
         )
 
         target_modules_list = target_modules
@@ -138,7 +146,8 @@ class LoQTModel(nn.Module):
                 use_eigenh_for_projection=use_eigenh_for_projection,
                 init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
                 train_projection_matrix=train_projection_matrix,
-                update_steps = self.update_steps
+                update_steps = self.update_steps,
+                grad_accumulation_steps = self.grad_accumulation_steps
             )
 
             del module
@@ -568,8 +577,8 @@ class LoraLinear(nn.Module):
         
         if self.training: # should not count in eval step
             self.grad_step_counter += 1
-        if self.grad_step_counter in self.update_steps:
-            self.attach_hooks()
+            if self.grad_step_counter in self.update_steps:
+                self.attach_hooks()
             
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
         return W_output + (self.scaling*lora_output)

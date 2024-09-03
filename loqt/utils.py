@@ -7,14 +7,14 @@ import json
 
 def get_proj_update_steps(args):
     steps = [0]
-    current_step = args.update_proj_gap * args.gradient_accumulation # Update the projection gap every update_proj_gap steps - use gradient accumulation step as the unit
+    update_proj_gap = args.update_proj_gap 
+    current_step = update_proj_gap # Update the projection gap every update_proj_gap steps - use gradient accumulation step as the unit
     current_gap = current_step
     step_count = 0
-
     if args.proj_gap_progression == "static":
         while current_step <= args.num_training_steps:
             steps.append(current_step)
-            current_step += args.update_proj_gap
+            current_step += update_proj_gap
     elif args.proj_gap_progression == "linear":
         increment = args.increment_size
         while current_step <= args.num_training_steps:
@@ -26,7 +26,7 @@ def get_proj_update_steps(args):
         while current_step <= args.num_training_steps:
             steps.append(current_step)
             step_count += 1
-            current_step += args.update_proj_gap + int((args.increment_size)**step_count)
+            current_step += update_proj_gap + int((args.increment_size)**step_count)
                 
     if args.max_proj_gap != 0:
         steps = [min(step, args.max_proj_gap) for step in steps]
