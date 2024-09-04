@@ -83,10 +83,13 @@ class LoQTModel(nn.Module):
         self.proj_type = proj_type
         self.quantize_w = quantize_w
         self.quantize_projection_matrix = quantize_projection_matrix
+        self.compensate_quant_error_iterations = compensate_quant_error_iterations
         self.use_offloading = use_offloading
         self.is_single_gpu = is_single_gpu
         self.only_train_lora = only_train_lora
         self.model_config = model_config
+        self.compute_dtype = compute_dtype
+        self.use_double_quant=use_double_quant
         self.use_eigenh_for_projection = use_eigenh_for_projection
         self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
         self.train_projection_matrix = train_projection_matrix
@@ -116,47 +119,39 @@ class LoQTModel(nn.Module):
             grad_accumulation_steps = self.grad_accumulation_steps
             
         )
-
-        target_modules_list = target_modules
-        if isinstance(target_modules_list, str):
-            target_modules_list = [target_modules_list]
-
-        for module_name, module in self.wrapped_model.named_modules():
-            
-            if not isinstance(module, nn.Linear):
-                continue
-
-            if not any(target_key in module_name for target_key in target_modules_list):
-                continue
-
-            new_module = LoraLinear(
-                module,
-                r=self.r,
-                lora_alpha = lora_alpha,
-                proj_type = self.proj_type,
-                device = self.device,
-                quantize_w=quantize_w,
-                use_double_quant=use_double_quant,
-                bnb_4bit_quant="nf4",
-                compute_dtype=compute_dtype,
-                quantize_projection_matrix = quantize_projection_matrix,
-                compensate_quant_error_iterations = compensate_quant_error_iterations,
-                use_offloading = self.use_offloading,
-                is_single_gpu=is_single_gpu,
-                use_eigenh_for_projection=use_eigenh_for_projection,
-                init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
-                train_projection_matrix=train_projection_matrix,
-                update_steps = self.update_steps,
-                grad_accumulation_steps = self.grad_accumulation_steps
-            )
-
-            del module
-
-            parent = self._get_parent(module_name)
-            module_suffix = module_name.split(".")[-1]
-            setattr(parent, module_suffix, new_module)
-
+        
+        self._wrap_target_modules()  # Wrap target modules with LoRA Linear layers
         torch.cuda.empty_cache()
+
+    def _wrap_target_modules(self):
+        """Wrap target modules with LoraLinear."""
+        target_modules_list = self.target_modules if isinstance(self.target_modules, list) else [self.target_modules]
+        for module_name, module in self.wrapped_model.named_modules():
+            if isinstance(module, nn.Linear) and any(target in module_name for target in target_modules_list):
+                new_module = LoraLinear(
+                    module,
+                    r=self.r,
+                    lora_alpha=self.lora_alpha,
+                    proj_type=self.proj_type,
+                    device=self.device,
+                    quantize_w=self.quantize_w,
+                    use_double_quant=self.use_double_quant,
+                    compute_dtype=self.compute_dtype,
+                    bnb_4bit_quant="nf4",
+                    quantize_projection_matrix=self.quantize_projection_matrix,
+                    compensate_quant_error_iterations=self.compensate_quant_error_iterations,
+                    use_offloading=self.use_offloading,
+                    is_single_gpu=self.is_single_gpu,
+                    use_eigenh_for_projection=self.use_eigenh_for_projection,
+                    init_lora_AB_as_random_and_zeros=self.init_lora_AB_as_random_and_zeros,
+                    train_projection_matrix=self.train_projection_matrix,
+                    update_steps=self.update_steps,
+                    grad_accumulation_steps=self.grad_accumulation_steps
+                )
+                parent = self._get_parent(module_name)
+                module_suffix = module_name.split(".")[-1]
+                setattr(parent, module_suffix, new_module)
+
     
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
@@ -445,9 +440,6 @@ class LoraLinear(nn.Module):
         Hook function that is called after gradients are computed.
         Reinitialize AB 
         """
-
-        print('self.grad_acc_counter',self.grad_acc_counter)
-        print('self.grad_accumulation_steps',self.grad_accumulation_steps)
         if self.grad_acc_counter == self.grad_accumulation_steps:
             self.reinitialize_LoRA_AB_after_merge()
             self.set_W_requires_grad(False)
