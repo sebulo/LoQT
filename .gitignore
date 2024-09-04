@@ -191,3 +191,4 @@ ssh_*
 
 scripts/pretraining/p1
 loqt/LoQT2.py
+loqt/LoQT_global_hooks.py
