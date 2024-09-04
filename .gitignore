@@ -190,3 +190,4 @@ ssh_*
 .vscode/launch.json
 
 scripts/pretraining/p1
+loqt/LoQT2.py
