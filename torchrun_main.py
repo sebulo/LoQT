@@ -234,6 +234,11 @@ def main(args):
     global_rank = int(os.environ['RANK'])
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    
+    if world_size == 1:
+        print('Setting sinlge_gpu Flag')
+        args.single_gpu = True
+    
     print(f"global_rank {global_rank}, local_rank {local_rank}, world_size {world_size}")
     
     # if args.use_offloading:
@@ -274,8 +279,9 @@ def main(args):
     if args.total_batch_size is not None:
         if args.gradient_accumulation is None:
             assert args.total_batch_size % world_size == 0, "total_batch_size must be divisible by world_size"
-            args.gradient_accumulation = args.total_batch_size // (args.batch_size * world_size)
+            args.gradient_accumulation = args.total_batch_size // (args.batch_size * world_size) # for bs 256 bsz and 512 tbsz and 2 gpus this is 1
             assert args.gradient_accumulation > 0, "gradient_accumulation must be greater than 0"
+        print('gradient_accumulation',args.gradient_accumulation)
 
     assert args.gradient_accumulation * args.batch_size * world_size == args.total_batch_size, \
         "gradient_accumulation * batch_size * world_size must be equal to total_batch_size"
@@ -363,6 +369,11 @@ def main(args):
         print('Using Hugging Face cache directory')
         model, model_config = load_model(args, None)
         
+        
+    update_steps = get_proj_update_steps(args)
+    print(f"Projection update steps: {update_steps}")
+    
+        
     if args.use_loqt and not args.continue_from:
         logger.info(f"Wrapping model with LoQT")
         model = LoQTModel(
@@ -384,7 +395,8 @@ def main(args):
             init_lora_AB_as_random_and_zeros=args.init_lora_AB_as_random_and_zeros,
             train_projection_matrix=args.train_projection_matrix,
             only_train_lora=args.only_train_lora,
-            
+            update_steps=update_steps,
+            grad_accumulation_steps = args.gradient_accumulation
         )
         if args.only_train_lora:
             args.use_loqt=False # make sure not to update weights 
@@ -407,9 +419,6 @@ def main(args):
             # Calculate the perplexity based on the total_loss returned from the evaluation
             perplexity = torch.exp(torch.tensor(total_loss))
             logger.info(f"Eval loss at step {update_step}: {total_loss}, perplexity: {perplexity}")
-
-    update_steps = get_proj_update_steps(args)
-    print(f"Projection update steps: {update_steps}")
     
     if args.activation_checkpointing:
         model.gradient_checkpointing_enable()
@@ -588,43 +597,10 @@ def main(args):
  
         global_step += 1
         local_step += 1
-
-        #should_reset_B = (
-        #    args.use_loqt and 
-        #    update_step in update_steps and
-        #    global_step % args.gradient_accumulation == 0
-        #    and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
-        #)
-
-        should_reset_B = (
-            args.use_loqt and 
-            update_step in update_steps and
-            global_step % args.gradient_accumulation == 0 and
-            (
-                (update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0)
-            )  # do not merge in last step before final eval. Only if first merge ste
-        )
         
-        if should_reset_B:
-            
-            logger.info("Resetting B matrix")
-            actual_model = get_model(model)
-            
-            dist.barrier()
-            start_time_merge = time.time()
-            torch.cuda.empty_cache()
-            actual_model.merge()
-            torch.cuda.empty_cache()
-
-            if not args.single_gpu:
-                dist.barrier()
-                broadcast_parameters(actual_model, local_rank)
-
-            if not layer_wise_flag:
-                optimizer.zero_grad()
-            actual_model.set_W_requires_grad(True)
-                
-
+        if (update_step - 1) in update_steps: 
+            get_model(model).print_and_reset_cumulative_merge_time() # culmulative time was saved in the previous iteration
+        
         if update_step > args.num_training_steps:
             logger.info(f"Reached max number of update steps (f{args.num_training_steps}). Stopping training.")
             print(f"Rank {global_rank} stopping training.")
@@ -649,6 +625,7 @@ def main(args):
         scaled_loss = loss / args.gradient_accumulation
         scaled_loss.backward()
         
+        
         if global_rank==0 and args.log_max_memory and update_step > 0 and update_step % args.log_max_memory_steps == 0:
             gpu_metrics = get_gpu_metrics_nvitop(this_process, suffix='_after_backward')
             metrics_to_log.update(gpu_metrics)
@@ -658,7 +635,6 @@ def main(args):
             pbar.set_description(f"Update steps, loss: {loss.item():.4f}")                
                 
         if global_step % args.gradient_accumulation != 0:
-            assert not should_reset_B
             continue
 
         # add grad clipping
@@ -666,34 +642,16 @@ def main(args):
 
         if global_rank == 0: pbar.update(1)
         
-        # The below code is only executed during the update step
-        if should_reset_B:
-            actual_model = get_model(model)
-            actual_model.reinitialize_LoRA_AB_after_merge()
-            
-            if not layer_wise_flag: 
-                optimizer.zero_grad()
-            actual_model.set_W_requires_grad(False)
-            if not args.single_gpu:
-                dist.barrier()
-                broadcast_parameters(actual_model, local_rank)
-            
-            merge_time = time.time() - start_time_merge
-            logger.info(f"Merge time: {merge_time:.2f} seconds")
-            import gc; gc.collect()
-            torch.cuda.empty_cache()
-
-        else:
-            if not layer_wise_flag:
-                optimizer.step()
-                scheduler.step()
-                    
-                if global_rank==0 and args.log_max_memory and update_step > 0 and update_step % args.log_max_memory_steps == 0:
-                    gpu_metrics = get_gpu_metrics_nvitop(this_process, suffix='_after_optimizer_step')
-                    metrics_to_log.update(gpu_metrics)
+        if not layer_wise_flag:# and not should_reset_B:
+            optimizer.step()
+            scheduler.step()
                 
-                optimizer.zero_grad()
+            if global_rank==0 and args.log_max_memory and update_step > 0 and update_step % args.log_max_memory_steps == 0:
+                gpu_metrics = get_gpu_metrics_nvitop(this_process, suffix='_after_optimizer_step')
+                metrics_to_log.update(gpu_metrics)
         
+            optimizer.zero_grad()
+    
         update_step += 1
         update_time = time.time() - update_time
 

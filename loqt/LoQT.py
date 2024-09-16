@@ -278,6 +278,7 @@ class LoQTModel(nn.Module):
     
 
     def to(self, *args, **kwargs):
+        print(f"Calling to() on {self.__class__.__name__}")
         super().to(*args, **kwargs)
         device = args[0] if args else kwargs.get("device", None)
         self.device = device
@@ -481,8 +482,8 @@ class LoraLinear(nn.Module):
         # Quantize_projection_matrix and train_projection_matrix should not both be True
         if self.quantize_projection_matrix and self.train_projection_matrix:
             raise ValueError("quantize_projection_matrix and train_projection_matrix cannot both be True")
-        if self.init_lora_AB_as_random_and_zeros and not self.train_projection_matrix:
-            raise ValueError("init_lora_AB_as_random_and_zeros can only be True when train_projection_matrix is True")
+        #if self.init_lora_AB_as_random_and_zeros and not self.train_projection_matrix:
+            #raise ValueError("init_lora_AB_as_random_and_zeros can only be True when train_projection_matrix is True")
 
     
     def determine_projection_type(self, W, proj_type):
@@ -664,7 +665,7 @@ class LoraLinear(nn.Module):
         torch.cuda.empty_cache()
 
         if self.quantize_w is None:
-            # self.W.weight.data = torch.ones_like(self.W.weight.data)
+            # self.W.weight.data = torch.ones_like(self.W.weinght.data)
             self.W.weight.data.add_(AB)
             self.full_precision_W = self.W.weight.data.detach().clone().to(self.offload_device)
             self.full_precision_W.requires_grad = False
@@ -723,14 +724,69 @@ class LoraLinear(nn.Module):
         # Update the global cumulative merge time
         cumulative_merge_time += time_end - time_start
             
+    # def initialize_LoRA_AB_random_and_zero(self):
+    #     #breakpoint()
+    #     if self.proj_type == 'left':
+    #         # Use the shape of lora_A for initialization
+    #         self.lora_A.weight.data = torch.empty(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
+    #         torch.nn.init.trunc_normal_(self.lora_A.weight.data, mean=0.0, std=0.02)
+            
+    #         # Use the shape of lora_B and normalize by rank
+    #         self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype) 
+            
+    #     else:
+    #         # Use the shape of lora_A and normalize by rank
+    #         self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype) 
+            
+    #         # Use the shape of lora_B for initialization
+    #         self.lora_B.weight.data = torch.empty(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+    #         torch.nn.init.trunc_normal_(self.lora_B.weight.data, mean=0.0, std=0.02)
+            
+    #     self.set_LoRA_requires_grad(True)
+            
+
+    def initialize_LoRA_AB_random_orthonormal_and_zero(self):
+        # Get the rank from the shape of lora_A or lora_B
+        r = self.lora_A_shape[1] if self.proj_type == 'left' else self.lora_B_shape[0]
+        w_shape = self.W.weight.shape  # Assuming W is an existing layer with a defined shape
+
+        # Generate a random orthonormal matrix of size NxN using float32 for stability
+        orthogonal_matrix = torch.randn(w_shape[0], w_shape[1], device=self.device, dtype=torch.float32)
+        Q, _ = torch.qr(orthogonal_matrix)
+        
+        breakpoint()
+
+        # Convert Q back to the desired compute_dtype
+        Q = Q.to(self.compute_dtype)
+
+        if self.proj_type == 'left':
+            # Initialize lora_A with truncated orthonormal matrix
+            self.lora_A.weight.data = Q[:, :r]
+            
+            # Initialize lora_B to zeros
+            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+            
+        else:
+            # Initialize lora_A to zeros
+            self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
+            
+            # Initialize lora_B with truncated orthonormal matrix
+            self.lora_B.weight.data = Q[:, :r]
+            
+        self.set_LoRA_requires_grad(True)
+        
     def initialize_LoRA_AB_random_and_zero(self):
+        breakpoint()
         if self.proj_type == 'left':
             self.lora_A.weight.data = torch.randn(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
-            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+            # and divide by math.sqrt(rank)
+            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype) / torch.sqrt(torch.tensor(self.r, dtype=torch.float))
         else:
             self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
-            self.lora_B.weight.data = torch.randn(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
-    
+            self.lora_B.weight.data = torch.randn(self.lora_B_shape, device=self.device, dtype=self.compute_dtype) / torch.sqrt(torch.tensor(self.r, dtype=torch.float))
+
+        self.set_LoRA_requires_grad(True)
+        
     def init_LoRA_with_gradient_projections(self):
         #Either it is a linear layer and has requires_grad or it is a quantized (bnb) layer and has require_grad_W
         self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
