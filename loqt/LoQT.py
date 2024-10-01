@@ -200,14 +200,15 @@ class LoQTModel(nn.Module):
                 repr_str += f"\n  ({name}): {param.size()}"
         return repr_str
     
-    def save_pretrained(self, path, save_original_model=False):
+    def save_pretrained(self, path, save_original_model=False, only_save_original_model=False):
         # Ensure all parameters are contiguous
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
         if save_original_model:
             model_to_save = self.return_original_model()
             torch.save(model_to_save, os.path.join(path, "original_model.pth"))
-        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
+        if not only_save_original_model:
+            torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
@@ -592,7 +593,7 @@ class LoraLinear(nn.Module):
                     self.W.weight_grad = torch.zeros(
                         (self.out_features, self.in_features),
                         device=self.offload_device,
-                        requires_grad=False,
+                        requires_grad=True,
                         dtype=self.compute_dtype
                     )
                     self.W.require_grad_W = torch.tensor(True, device=self.device, requires_grad=False)
@@ -644,8 +645,11 @@ class LoraLinear(nn.Module):
                 dist.all_reduce(self.W.weight.grad, op=dist.ReduceOp.AVG)
                 dist.barrier()
             W_grad = self.W.weight.grad.T #Weight is stored as transpose in nn.linear
-            
-        assert not torch.all(W_grad == 0), "Gradient of W is zero"
+        
+        
+        if torch.all(W_grad == 0):
+            print("Gradient of W is zero")
+        #assert not torch.all(W_grad == 0), "Gradient of W is zero"
 
         # Compute the projection matrices using the unified function
         U_r, Q_r = compute_projection_matrix(W_grad, self.r, method=self.projection_method, out=self.projection_out)

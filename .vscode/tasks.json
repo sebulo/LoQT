@@ -2,14 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Run GSMK Script",
+            "label": "Run pre-launch script",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/tests/gsmk_gpt-neo.sh",
+            "command": "source ~/.bashrc && conda activate loqt",
             "problemMatcher": [],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
+            "isBackground": false
         }
     ]
 }

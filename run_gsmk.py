@@ -6,7 +6,7 @@ import math
 import os
 import random
 from pathlib import Path
-import datetime
+from datetime import datetime
 
 import datasets
 import evaluate
@@ -52,6 +52,9 @@ from transformers.utils.versions import require_version
 from optimizers import GaLoreAdamW
 
 from loqt.LoQT import LoQTModel
+
+# for testing
+from test_gsmk import evaluation, ModelArguments, DataArguments
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.38.0.dev0")
@@ -178,7 +181,7 @@ def parse_args():
         choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"],
     )
     parser.add_argument(
-        "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
+        "--num_warmup_steps_procentage", type=float, default=0.0, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
@@ -258,6 +261,10 @@ def parse_args():
     
     parser.add_argument("--save_original_model", default=True, action="store_true", help="flag for LoQT to also save full model and not just model + adapters")
     parser.add_argument("--experiment_name", type=str, default="" )
+    parser.add_argument("--train_all_params", default=True)
+    parser.add_argument('--eval_subset_dataset', type=float, default=1.0, help="subset to test on")
+    parser.add_argument("--run_eval_every_epoch", type=int, default = 1)
+    
     
     
     return parser.parse_args()
@@ -406,17 +413,18 @@ def main():
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
-    if args.experiment_name == "":
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if args.experiment_name:
+        experiment_name = args.experiment_name
+    else:
         model_name_trimmed = args.model_name_or_path.replace("/", "_")
         experiment_name = f"{model_name_trimmed}_GSMK"
-    else:
-        experiment_name = args.experiment_name
-        
-    # add experiment name subfolder in output_dir
-    output_dir = os.path.join(args.output_dir, experiment_name)
     
-    time_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_dir = os.path.join(output_dir, time_now)
+    unique_output_dir = os.path.join(args.output_dir, f"{experiment_name}_epochs{args.num_train_epochs}_seed{args.seed}{current_time}")
+    args.output_dir = unique_output_dir
+    output_dir = args.output_dir
+    print('output_dir: ', output_dir)
+    
     accelerator = (
         Accelerator(log_with=args.report_to, project_dir=args.output_dir) if args.with_tracking else Accelerator()
     )
@@ -486,9 +494,10 @@ def main():
             torch_dtype=torch.bfloat16,
             token=args.hub_token,
         )
-        # TODO is this what we want ?
-        for param in model.parameters():
-            param.requires_grad = False
+        if args.train_all_params:
+            # TODO is this what we want ?
+            for param in model.parameters():
+                param.requires_grad = False
         model = LoQTModel(
             model,
             r=args.lora_r,
@@ -552,7 +561,7 @@ def main():
     #data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=(8 if accelerator.use_fp16 else None))
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
     
-    # Optimizer 
+    # # Optimizer 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
@@ -568,22 +577,20 @@ def main():
     
     # Determine the number of update steps per epoch
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-
-    # If max_train_steps is not specified, calculate it based on the number of epochs
-    overrode_max_train_steps = False
+    
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-        overrode_max_train_steps = True
 
     args.num_training_steps = args.max_train_steps  # Used by get_projection_update_steps
 
     update_steps = get_proj_update_steps(args)
     print('update_steps: ', update_steps)
 
+    num_warmup_steps = args.num_warmup_steps_procentage * args.max_train_steps
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
         optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
+        num_warmup_steps=num_warmup_steps,
         num_training_steps=args.max_train_steps,
     )
 
@@ -598,15 +605,6 @@ def main():
 
     # Recalculate total training steps as the size of the training dataloader may have changed
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-
-    # Adjust max_train_steps if it was overridden
-    if overrode_max_train_steps:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-
-    # Recalculate the number of training epochs
-    if not overrode_max_train_steps:
-        args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
     # Log the calculations for debugging purposes
     logger.info(f"Number of update steps per epoch: {num_update_steps_per_epoch}")
     logger.info(f"Max training steps: {args.max_train_steps}")
@@ -639,9 +637,14 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
     starting_epoch = 0
+    best_acc = 0
 
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
+    
+    # save the model at the beginning
+    if args.output_dir:
+        accelerator.save_state(args.output_dir)
 
     # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -650,11 +653,8 @@ def main():
         model.train()
         if args.with_tracking:
             total_loss = 0
-        if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
-            # We skip the first `n` batches in the dataloader when resuming from a checkpoint
-            active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
-        else:
-            active_dataloader = train_dataloader
+        
+        active_dataloader = train_dataloader
 
         for step, batch in enumerate(active_dataloader):
             # completed_steps is update_step and global_step is step
@@ -680,6 +680,12 @@ def main():
                 total_loss += loss.detach().float()
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
+            
+            if step % args.gradient_accumulation_steps != 0:
+                if step != 0:
+                    assert not should_reset_B
+                continue
+
             if should_reset_B:
                 model.reinitialize_LoRA_AB_after_merge()
                 optimizer.zero_grad()
@@ -687,7 +693,7 @@ def main():
                 model.set_LoRA_requires_grad(True)
                 model.disable_lora(False)
                 print('num_trainable_params: ', sum(p.numel() for p in model.parameters() if p.requires_grad))
-            elif step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
+            elif (step+1) % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -707,6 +713,14 @@ def main():
                 logger.info(f"epoch {epoch}, step {step}: {loss.item()}")
                 if args.with_tracking:
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
+                    
+        if epoch > 0 and (epoch % args.run_eval_every_epoch == 0 or epoch == args.num_train_epochs - 1):
+            
+            accuracy = run_evaluation(args.output_dir, model, tokenizer, device, args)
+            if accuracy > best_acc:
+                best_acc = accuracy
+            accelerator.log({"eval accuracy": accuracy, "step": completed_steps, "epoch": epoch, "best eval accuracy": best_acc})
+            logger.info(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
 
         if args.with_tracking:
             log_data = {
@@ -714,6 +728,7 @@ def main():
                 "epoch": epoch,
             }
             accelerator.log(log_data, step=completed_steps)
+            logger.info(f"epoch {epoch}: {total_loss / len(train_dataloader)}")
 
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
@@ -730,7 +745,7 @@ def main():
         if not args.use_loqt:
             unwrapped_model.save_pretrained(args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save)
         else:
-            model.save_pretrained(args.output_dir, save_original_model=args.save_original_model)
+            model.save_pretrained(args.output_dir, save_original_model=args.save_original_model, only_save_original_model=True)
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:
@@ -742,6 +757,37 @@ def main():
     ##########################################################################################
     ##########################################################################################
 
+def run_evaluation(model_dir, model,  tokenizer, device, args ):
+    # Find the latest checkpoint directory
+    print(f"Using latest checkpoint directory for evaluation: {model_dir}")
+    
+    # get full model
+    org_model = model.return_original_model()
+    
+    # Move the model off the device
+    model.to('cpu')
+    
+    tokenizer.save_pretrained(args.output_dir)
+    # Create model_args and data_args for evaluation
+    model_args = ModelArguments(
+        model_name_or_path=args.model_name_or_path,
+        ckpt_dir=model_dir,
+        full_precision=True,
+        token='x',
+        model_max_length=args.max_length,
+        use_loqt=args.use_loqt
+    )
+    
+    data_args = DataArguments(
+        data_name="gsm8k",
+        batch_size=args.per_device_eval_batch_size  # Adjust batch size as needed
+    )
+    
+    # Call the evaluation function
+    accuracy = evaluation(model_args, data_args, model =org_model, print_decoding = False, subset_dataset = args.eval_subset_dataset)
+    
+    model.to(device)
+    return accuracy
     
 # Helper function to get model configuration
 def get_model_config(model):
