@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 import datasets
-import evaluate
+# import evaluate
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -19,7 +19,7 @@ from huggingface_hub import Repository, create_repo
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from loqt.utils import get_proj_update_steps, filter_linear_target_modules
-from peft import LoraConfig, get_peft_model, PeftModel, LoraConfig, TaskType, get_peft_model
+# from peft import LoraConfig, get_peft_model, PeftModel, LoraConfig, TaskType, get_peft_model
 
 # Modified from https://github.com/tatsu-lab/stanford_alpaca/blob/main/train.py
 
@@ -54,7 +54,7 @@ from optimizers import GaLoreAdamW
 from loqt.LoQT import LoQTModel
 
 # for testing
-from test_gsmk import evaluation, ModelArguments, DataArguments
+from eval_gsmk import evaluation, ModelArguments, DataArguments
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.38.0.dev0")
@@ -512,6 +512,7 @@ def main():
             compensate_quant_error_iterations=args.compensate_quant_error_iterations,
             is_single_gpu=args.single_gpu,
             only_train_lora=args.only_train_lora,
+            use_offloading=args.use_offloading,
         )
 
     else:
@@ -715,12 +716,13 @@ def main():
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
                     
         if epoch > 0 and (epoch % args.run_eval_every_epoch == 0 or epoch == args.num_train_epochs - 1):
-            
+            print('running evaluation')
             accuracy = run_evaluation(args.output_dir, model, tokenizer, device, args)
             if accuracy > best_acc:
                 best_acc = accuracy
             accelerator.log({"eval accuracy": accuracy, "step": completed_steps, "epoch": epoch, "best eval accuracy": best_acc})
             logger.info(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
+            print(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
 
         if args.with_tracking:
             log_data = {
