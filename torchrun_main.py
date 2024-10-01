@@ -598,9 +598,6 @@ def main(args):
         global_step += 1
         local_step += 1
         
-        if (update_step - 1) in update_steps: 
-            get_model(model).print_and_reset_cumulative_merge_time() # culmulative time was saved in the previous iteration
-        
         if update_step > args.num_training_steps:
             logger.info(f"Reached max number of update steps (f{args.num_training_steps}). Stopping training.")
             print(f"Rank {global_rank} stopping training.")
