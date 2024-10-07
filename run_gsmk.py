@@ -379,7 +379,7 @@ class DataCollatorForSupervisedDataset:
         # Padding the input_ids and labels
         batch["input_ids"] = self.tokenizer.pad(
             {"input_ids": batch["input_ids"]},
-            padding=True,
+            padding='longest',
             max_length=self.tokenizer.model_max_length,
             return_tensors="pt",
         )["input_ids"]
@@ -644,8 +644,8 @@ def main():
     progress_bar.update(completed_steps)
     
     # save the model at the beginning
-    if args.output_dir:
-        accelerator.save_state(args.output_dir)
+    # if args.output_dir:
+    #     accelerator.save_state(args.output_dir)
 
     # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -659,21 +659,21 @@ def main():
 
         for step, batch in enumerate(active_dataloader):
             # completed_steps is update_step and global_step is step
-            should_reset_B = (
-                args.use_loqt and 
-                completed_steps in update_steps and
-                completed_steps % args.update_proj_gap == 0 and 
-                step % args.gradient_accumulation_steps == 0
-            )
+            # should_reset_B = (
+            #     args.use_loqt and 
+            #     completed_steps in update_steps and
+            #     completed_steps % args.update_proj_gap == 0 and 
+            #     step % args.gradient_accumulation_steps == 0
+            # )
 
-            if should_reset_B:
-                logger.info(f"Resetting B matrix at step {completed_steps}")
-                model.merge()
-                optimizer.zero_grad()
-                model.set_W_requires_grad(True)
-                model.set_LoRA_requires_grad(True)
-                model.disable_lora(False)
-                model.lora_zero_init()
+            # if should_reset_B:
+            #     logger.info(f"Resetting B matrix at step {completed_steps}")
+            #     model.merge()
+            #     optimizer.zero_grad()
+            #     model.set_W_requires_grad(True)
+            #     model.set_LoRA_requires_grad(True)
+            #     model.disable_lora(False)
+            #     model.lora_zero_init()
 
             outputs = model(**batch)
             loss = outputs.loss
@@ -683,17 +683,17 @@ def main():
             accelerator.backward(loss)
             
             if step % args.gradient_accumulation_steps != 0:
-                if step != 0:
-                    assert not should_reset_B
+                # if step != 0:
+                #     assert not should_reset_B
                 continue
 
-            if should_reset_B:
-                model.reinitialize_LoRA_AB_after_merge()
-                optimizer.zero_grad()
-                model.set_W_requires_grad(False)
-                model.set_LoRA_requires_grad(True)
-                model.disable_lora(False)
-                print('num_trainable_params: ', sum(p.numel() for p in model.parameters() if p.requires_grad))
+            # if should_reset_B:
+            #     model.reinitialize_LoRA_AB_after_merge()
+            #     optimizer.zero_grad()
+            #     model.set_W_requires_grad(False)
+            #     model.set_LoRA_requires_grad(True)
+            #     model.disable_lora(False)
+            #     print('num_trainable_params: ', sum(p.numel() for p in model.parameters() if p.requires_grad))
             elif (step+1) % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()

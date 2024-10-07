@@ -20,6 +20,7 @@
 # conda activate loqt
 
 #put hf token here?
+#   --model_name_or_path meta-llama/Llama-2-7B-hf \
 #$HF_TOKEN=....
 export CUDA_VISIBLE_DEVICES=1
 python run_gsmk.py \
@@ -36,8 +37,8 @@ python run_gsmk.py \
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 4 \
-  --gradient_accumulation_steps 4 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 16 \
   --learning_rate 5e-5 \
   --output_dir checkpoints \
   --use_loqt true \
@@ -46,5 +47,6 @@ python run_gsmk.py \
   --with_tracking \
   --report_to wandb \
   --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
+  --checkpointing_steps 1000 \
+  --experiment_name gsm8k_1BNeo_4bit_quant
 
