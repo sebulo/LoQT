@@ -267,7 +267,7 @@ def batch_fn(dataset, batch_size):
             yield batch
             batch = []
     if len(batch) > 0:
-        yield batch
+        yield collate_fn(batch)
 
 
 def max_train_tokens_to_number(max_train_tokens):

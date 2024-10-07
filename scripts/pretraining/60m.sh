@@ -11,7 +11,7 @@ torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
     --num_training_steps 10000 \
     --warmup_steps 1000 \
     --eval_every 1000 \
-    --save_every 10000 \
+    --save_every 1000 \
     --dtype bfloat16 \
     --optimizer adamw \
     --use_loqt True\
@@ -20,4 +20,5 @@ torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
     --compensate_quant_error_iterations 5 \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
+    --save_original_model True \
     --name 60m_LoQT

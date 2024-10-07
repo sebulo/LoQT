@@ -182,3 +182,13 @@ LoQT/LoQT/checkpoints
 *__pycache__
 
 *flag_file
+
+scripts/tests/test_checkpoints
+
+# ignore all starting with ssh_
+ssh_*
+.vscode/launch.json
+
+scripts/pretraining/p1
+loqt/LoQT2.py
+loqt/LoQT_global_hooks.py

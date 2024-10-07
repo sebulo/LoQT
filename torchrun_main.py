@@ -4,6 +4,7 @@ import json
 import random
 import argparse
 import numpy as np
+import tempfile
 
 import torch
 import torch.nn as nn
@@ -44,6 +45,7 @@ def parse_args(args):
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--use_hf_model", default=False, action="store_true")
     parser.add_argument("--continue_from", type=str, default=None)
+    parser.add_argument("--eval_at_continue_from",  default=True, type=lambda x: x.lower() == "true", help='Perform evaluation just after loading')
     parser.add_argument("--skip_batches_in_continue_from", default=False, type=lambda x: x.lower() == "true")
     parser.add_argument("--batch_size", type=int, required=True)
     parser.add_argument("--gradient_accumulation", type=int, default=None)
@@ -65,6 +67,7 @@ def parse_args(args):
                         help="Number of tokens to train on. Overwrites num_training_steps. "
                              "You can use M and B suffixes, e.g. 100M or 1B.")
     parser.add_argument("--save_every", type=int, default=10000)
+    parser.add_argument("--save_original_model", default=False, type=lambda x: x.lower() == "true", help='Saves both the original and the model with the adapters if True')
     parser.add_argument("--save_dir", type=str, default='checkpoints')
     parser.add_argument("--tags", type=str, default=None)
     parser.add_argument("--dtype", type=str, default="bfloat16" if torch.cuda.is_bf16_supported() else "float16") # make fallback to fp16
@@ -73,6 +76,16 @@ def parse_args(args):
     parser.add_argument("--name", type=str, default="test")
     parser.add_argument("--grad_clipping", type=float, default=0.0)   
     parser.add_argument("--num_eval_tokens", type=int, default=10000000)
+
+     # ReLoRA Params
+    parser.add_argument("--only_train_lora", default=False, type=lambda x: x.lower() == "true")
+    parser.add_argument("--init_lora_AB_as_random_and_zeros", default=False, type=lambda x: x.lower() == "true")
+    parser.add_argument("--train_projection_matrix", default=False, type=lambda x: x.lower() == "true")
+
+    
+    
+    parser.add_argument("--load_model_to_tmpdir", action="store_true", help="Load model to a temporary directory") # if cashe size is too small to load model from hf
+    
     
     # beta1 for adafactor
     parser.add_argument("--beta1", type=float, default=0.0)
@@ -119,20 +132,48 @@ def parse_args(args):
     parser.add_argument('--wandb_tag', type=str, default=None, help='Optional single tag for the wandb experiment')
     parser.add_argument('--log_max_memory', default=False, type=lambda x: x.lower() == "true")
     parser.add_argument('--log_max_memory_steps', type=int, default=1, help="Interval for logging maximum memory usage")
+    
+    parser.add_argument('--is_icelandic_dataset', default=False, type=lambda x: x.lower() == "true")
 
     args = parser.parse_args(args)
 
     args = args_utils.check_args_torchrun_main(args)
     return args
 
+def load_model(args, cache_dir):
+    model = None
+    model_config = None
+
+    def get_pretrained_kwargs():
+        """Helper function to conditionally include cache_dir in kwargs."""
+        if cache_dir:
+            return {'cache_dir': cache_dir}
+        return {}
+
+    if args.model_config is not None:
+        model_config = AutoConfig.from_pretrained(args.model_config, **get_pretrained_kwargs())
+        if args.use_hf_model:
+            model = AutoModelForCausalLM.from_config(model_config, **get_pretrained_kwargs())
+        else:
+            model = LlamaForCausalLM(model_config)
+    elif args.model_name is not None:
+        if args.use_hf_model:
+            model = AutoModelForCausalLM.from_pretrained(args.model_name, **get_pretrained_kwargs())
+        else:
+            model = LlamaForCausalLM.from_pretrained(args.model_name, **get_pretrained_kwargs())
+        model_config = model.config
+    else:
+        raise ValueError("Either model_config or model_name must be provided")
+    
+    return model, model_config
 
 @torch.no_grad()
-def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None):
+def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None, is_icelandic_dataset=False):
     is_training_at_entry = model.training
     model.eval()
     _time = time.time()
     if dataset is None:
-        val_data = datasets.load_dataset("c4", "en", split="validation", streaming=True)
+        val_data = datasets.load_dataset("allenai/c4", "en", split="validation", streaming=True, trust_remote_code=True)
     else:
         val_data = dataset
     val_data = val_data.shuffle(seed=42)
@@ -141,10 +182,16 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     if not args.single_gpu:
         val_data = datasets.distributed.split_dataset_by_node(val_data, rank=global_rank, world_size=world_size)
 
+    # C4 values
+    remove_columns = ["text", "timestamp", "url"]
+    if is_icelandic_dataset:
+        # Hard coded for the icelandic dataset
+        remove_columns = ['prefix', 'source', 'target', 'origin', 'text']
+    
     val_data_mapped = val_data.map(
         preprocess_batched,
         batched=True,
-        remove_columns=["text", "timestamp", "url"],
+        remove_columns=remove_columns
     )
     val_data_mapped.batch = lambda batch_size: training_utils.batch_fn(val_data_mapped, batch_size)
 
@@ -159,7 +206,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
             break
         total_batches += 1
 
-        batch = {k: v.to(device) for k, v in batch.items()}
+        batch = {k: torch.tensor(v).to(device) for k, v in batch.items()}
         labels = batch["input_ids"].clone()
         labels[labels == pad_idx] = -100
         loss = model(**batch, labels=labels).loss
@@ -167,6 +214,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
         evaluated_on_tokens += (batch["input_ids"] != pad_idx).sum().item() * world_size
 
+    #total_loss = total_loss / max(total_batches, 1)
     total_loss = total_loss / total_batches
 
     # Gather losses across all GPUs
@@ -177,6 +225,60 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     if is_training_at_entry:
         model.train()
     return total_loss, evaluated_on_tokens
+
+
+# @torch.no_grad()
+# def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None):
+#     is_training_at_entry = model.training
+#     model.eval()
+#     _time = time.time()
+#     if dataset is None:
+#         val_data = datasets.load_dataset("c4", "en", split="validation", streaming=True)
+#     else:
+#         val_data = dataset
+#     val_data = val_data.shuffle(seed=42)
+#     logger.info(f"Loaded validation dataset in {time.time() - _time:.2f} seconds")
+
+#     if not args.single_gpu:
+#         val_data = datasets.distributed.split_dataset_by_node(val_data, rank=global_rank, world_size=world_size)
+
+#     val_data_mapped = val_data.map(
+#         preprocess_batched,
+#         batched=True,
+#         remove_columns=["text", "timestamp", "url"],
+#     )
+#     val_data_mapped.batch = lambda batch_size: training_utils.batch_fn(val_data_mapped, batch_size)
+
+#     target_eval_tokens = args.num_eval_tokens
+#     evaluated_on_tokens = 0
+#     total_loss = torch.tensor(0.0).to(device)
+#     total_batches = 1
+#     logger.info(f"Eval set prepared in {time.time() - _time:.2f} seconds")
+
+#     for batch in val_data_mapped.batch(batch_size=batch_size):
+#         if evaluated_on_tokens > target_eval_tokens:
+#             break
+#         total_batches += 1
+
+#         batch = {k: v.to(device) for k, v in batch.items()}
+#         labels = batch["input_ids"].clone()
+#         labels[labels == pad_idx] = -100
+#         loss = model(**batch, labels=labels).loss
+#         total_loss += loss.detach()
+
+#         evaluated_on_tokens += (batch["input_ids"] != pad_idx).sum().item() * world_size
+
+#     total_loss = total_loss / total_batches
+
+#     # Gather losses across all GPUs
+#     gathered_losses = [torch.zeros_like(total_loss) for _ in range(world_size)]
+#     dist.all_gather(gathered_losses, total_loss)
+#     total_loss = sum([t.item() for t in gathered_losses]) / world_size
+
+#     if is_training_at_entry:
+#         model.train()
+#     return total_loss, evaluated_on_tokens
+
 
 
 def main(args):    
@@ -262,9 +364,8 @@ def main(args):
         logger.info(f"{k:30} {v}")
     logger.info("*" * 40)
 
-
     if args.dataset_name is None:
-        data = datasets.load_dataset("allenai/c4", "en", split="train", streaming=True)
+        data = datasets.load_dataset("allenai/c4", "en", split="train", streaming=True, trust_remote_code=True)
         eval_dataset = None
     # check if folder exists
     elif os.path.exists(args.dataset_name):
@@ -307,20 +408,16 @@ def main(args):
     dataset = PreprocessedIterableDataset(data, tokenizer, batch_size=args.batch_size, max_length=args.max_length)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=None, num_workers=args.workers)
     
-    if args.model_config is not None:
-        model_config = AutoConfig.from_pretrained(args.model_config)
-        if args.use_hf_model:
-            model: HF_LlamaForCausalLM = AutoModelForCausalLM.from_config(model_config)
-        else:
-            model = LlamaForCausalLM(model_config)
-    elif args.model_name is not None:
-        if args.use_hf_model:
-            model = AutoModelForCausalLM.from_pretrained(args.model_name)
-        else:
-            model = LlamaForCausalLM.from_pretrained(args.model_name)
-        model_config = model.config
+    model = None
+    model_config = None
+
+    if args.load_model_to_tmpdir:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            print('Using temporary directory for caching:', tmpdirname)
+            model, model_config = load_model(args, tmpdirname)
     else:
-        raise ValueError("Either model_config or model_name must be provided")
+        print('Using Hugging Face cache directory')
+        model, model_config = load_model(args, None)
         
     if args.use_loqt and not args.continue_from:
         logger.info(f"Wrapping model with LoQT")
@@ -340,7 +437,13 @@ def main(args):
             is_single_gpu = args.single_gpu,
             model_config = model_config.to_dict(),
             use_eigenh_for_projection=args.use_eigenh_for_projection,
+            init_lora_AB_as_random_and_zeros=args.init_lora_AB_as_random_and_zeros,
+            train_projection_matrix=args.train_projection_matrix,
+            only_train_lora=args.only_train_lora,
+            
         )
+        if args.only_train_lora:
+            args.use_loqt=False # make sure not to update weights 
 
     global_step = 0
     update_step = 0
@@ -348,33 +451,19 @@ def main(args):
     tokens_seen_before = 0
 
     if args.continue_from is not None:
-        logger.info("*" * 40)
-        logger.info(f"Loading model from {args.continue_from}")
-        if args.use_loqt:
-            model = LoQTModel.from_pretrained(args.continue_from, device)
-            model.to(device)
-            print(model)
-        else:
-            # check if file with .bin or .safetensors
-            model = load_model_from_checkpoint(args.continue_from, model)
-
-        training_state = os.path.join(args.continue_from, "training_state.json")
-        if os.path.exists(training_state):
-            with open(training_state) as f:
-                state = json.load(f)
-            global_step = state["global_step"]
-            update_step = state["update_step"]
-            tokens_seen = state["tokens_seen"]
-            tokens_seen_before = state["tokens_seen_before"]
-            logger.info(f"Loaded training state from {training_state}")
-            logger.info(f"global_step: {global_step}, update_step: {update_step}, tokens_seen: {tokens_seen}")  
-            del state
-        else:
-            logger.warning(f"No training state found in {training_state}")
-
-        logger.info(f"Model successfully loaded (strict=True policy)")
-        logger.info("*" * 40)
+        model, global_step, update_step, tokens_seen, tokens_seen_before = load_checkpoint(model, args, logger, device)
+        print('Model:', model)
         
+        if args.eval_at_continue_from:
+            print('Performing Evaluation After Loading Model')
+            logger.info(f"Performing evaluation at step {update_step}")
+            total_loss, evaluated_on_tokens = evaluate_model(
+                model, preprocess_batched, tokenizer.pad_token_id, global_rank, world_size, device, args.batch_size, eval_dataset, args.is_icelandic_dataset
+            )
+            # Calculate the perplexity based on the total_loss returned from the evaluation
+            perplexity = torch.exp(torch.tensor(total_loss))
+            logger.info(f"Eval loss at step {update_step}: {total_loss}, perplexity: {perplexity}")
+
     update_steps = get_proj_update_steps(args)
     print(f"Projection update steps: {update_steps}")
     
@@ -545,6 +634,9 @@ def main(args):
     # Placeholder for a temporary scheduler used after merging
     metrics_to_log = {}
     logging_counter_memory_usage_dict = 0
+    
+    unique_id = int(time.time())
+    unique_directory_name = f"loqt_{unique_id}"
 
     for batch_idx, batch in enumerate(dataloader):
         if batch_idx < skip_batches and args.skip_batches_in_continue_from: 
@@ -553,14 +645,24 @@ def main(args):
         global_step += 1
         local_step += 1
 
+        #should_reset_B = (
+        #    args.use_loqt and 
+        #    update_step in update_steps and
+        #    global_step % args.gradient_accumulation == 0
+        #    and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
+        #)
+
         should_reset_B = (
             args.use_loqt and 
             update_step in update_steps and
-            global_step % args.gradient_accumulation == 0
-            and update_step + args.update_proj_gap < args.num_training_steps # do special merge before just before finishing
+            global_step % args.gradient_accumulation == 0 and
+            (
+                (update_step + args.update_proj_gap < args.num_training_steps) or (update_step == 0)
+            )  # do not merge in last step before final eval. Only if first merge ste
         )
         
         if should_reset_B:
+            
             logger.info("Resetting B matrix")
             actual_model = get_model(model)
             
@@ -623,10 +725,7 @@ def main(args):
         # The below code is only executed during the update step
         if should_reset_B:
             actual_model = get_model(model)
-            time_start_lora_init = time.time()
-            actual_model.init_LoRA_with_gradient_projections()
-            lora_init_duration = time.time() - time_start_lora_init
-            logger.info(f"time_start_lora_init: {lora_init_duration:.2f} seconds")
+            actual_model.reinitialize_LoRA_AB_after_merge()
             
             if not layer_wise_flag: 
                 optimizer.zero_grad()
@@ -668,14 +767,14 @@ def main(args):
                 update_time=update_time,
                 args=args,
                 logger=logger,
-                layer_wise_flag=layer_wise_flag
+                layer_wise_flag=layer_wise_flag,
             )
 
         # evaluation
-        if (update_step + 1) % args.eval_every== 0: # update_step+1 to evaluate just before merging.
+        if args.eval_every != 0 and update_step % args.eval_every== 0: # update_step+1 to evaluate just before merging.
             logger.info(f"Performing evaluation at step {update_step}")
             total_loss, evaluated_on_tokens = evaluate_model(
-                model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size, eval_dataset
+                model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size, eval_dataset,args.is_icelandic_dataset
             )
             # Calculate the perplexity based on the total_loss returned from the evaluation
             perplexity = torch.exp(torch.tensor(total_loss))
@@ -718,7 +817,7 @@ def main(args):
     if global_rank == 0: pbar.close()
 
     current_model_directory = f"{args.save_dir}/model_{update_step}"
-    if global_rank == 0 and not os.path.exists(current_model_directory) and args.run_final_eval : 
+    if global_rank == 0 and not os.path.exists(current_model_directory): 
         save_checkpoint(
                 model,
                 optimizer=optimizer_dict if layer_wise_flag else optimizer,
@@ -731,7 +830,7 @@ def main(args):
                 update_time=update_time,
                 args=args,
                 logger=logger,
-                layer_wise_flag=layer_wise_flag
+                layer_wise_flag=layer_wise_flag,
             )
 
 
@@ -745,7 +844,7 @@ def main(args):
         torch.cuda.empty_cache()
     
         total_loss, evaluated_on_tokens = evaluate_model(
-            model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size
+            model, preprocess_batched, pad_idx, global_rank, world_size, device, args.batch_size, eval_dataset
         )
         perplexity = torch.exp(torch.tensor(total_loss))
         if global_rank == 0:
@@ -764,13 +863,14 @@ def main(args):
 
 
 def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_config, tokens_seen, tokens_seen_before, update_time, args, logger, layer_wise_flag):
+                
     latest_checkpoint_directory = f"{args.save_dir}/latest_checkpoint"
     logger.info(f"Overwriting latest model and optimizer at {latest_checkpoint_directory}, update step {update_step}")
     os.makedirs(latest_checkpoint_directory, exist_ok=True)  # Ensures the directory exists, does nothing if already exists
 
     # Save the actual model
     actual_model = get_model(model)
-    actual_model.save_pretrained(latest_checkpoint_directory) 
+    actual_model.save_pretrained(latest_checkpoint_directory, args.save_original_model if args.save_original_model else False)
 
     # Save optimizer and scheduler states
     optimizer_checkpoint = {
@@ -788,8 +888,6 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
         })
         torch.save(optimizer_checkpoint, f"{latest_checkpoint_directory}/optimizer.pt")
     else:
-        #optimizer_checkpoint.update({"optimizer_dict": {k: v.state_dict() for k, v in optimizer.items()}})
-        #optimizer_checkpoint.update({"layerwise_optimizers": {name: opt.state_dict() for name, opt in optimizer.items()}})
         optimizer_checkpoint.update({"layerwise_optimizers": {f"param_{i}": opt.state_dict() for i, (param, opt) in enumerate(optimizer.items())}})
         torch.save(optimizer_checkpoint, f"{latest_checkpoint_directory}/layerwise_optimizer.pt")
 
@@ -813,7 +911,29 @@ def save_checkpoint(model, optimizer, scheduler, update_step, global_step, run_c
     with open(f"{latest_checkpoint_directory}/wandb.json", "w") as f:
         json.dump(wandb_info, f, indent=4)
 
+def load_checkpoint(model, args, logger, device):
+    logger.info(f"Loading model from {args.continue_from}")
+    if args.use_loqt:
+        model = LoQTModel.from_pretrained(args.continue_from, device, saved_as_full_model=args.save_original_model)
+    else:
+        model = load_model_from_checkpoint(args.continue_from, model)
 
+    training_state = os.path.join(args.continue_from, "training_state.json")
+    if os.path.exists(training_state):
+        with open(training_state) as f:
+            state = json.load(f)
+        global_step = state["global_step"]
+        update_step = state["update_step"]
+        tokens_seen = state["tokens_seen"]
+        tokens_seen_before = state["tokens_seen_before"]
+        logger.info(f"Loaded training state from {training_state}")
+        logger.info(f"global_step: {global_step}, update_step: {update_step}, tokens_seen: {tokens_seen}")  
+        del state
+    else:
+        logger.warning(f"No training state found in {training_state}")
+
+    logger.info(f"Model successfully loaded (strict=True policy)")
+    return model, global_step, update_step, tokens_seen, tokens_seen_before
 
 if __name__ == "__main__":
     print("Starting script")

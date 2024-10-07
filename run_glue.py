@@ -817,7 +817,7 @@ def main():
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
             if should_reset_B:
-                model.init_LoRA_with_gradient_projections()
+                model.reinitialize_LoRA_AB_after_merge()
                 optimizer.zero_grad()
                 model.set_W_requires_grad(False)
                 model.set_LoRA_requires_grad(True)

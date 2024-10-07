@@ -1,0 +1,15 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run GSMK Script",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/tests/gsmk_gpt-neo.sh",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

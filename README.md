@@ -1,7 +1,5 @@
 # LoQT
-
-This repository contains the pre-release version of the code accompanying the paper "LoQT: Low Rank Adapters for Quantized Training". Note that this is an early version of the codebase.
-
+This repository contains the pre-release version of the code accompanying the paper <a href="https://arxiv.org/abs/2405.16528" target="_blank">"LoQT: Low Rank Adapters for Quantized Training"</a>. Note that this is an early version of the codebase.
 LoQT is a method for training quantized models with low-rank adapters, aimed at reducing the number of parameters in large language models. This method is implemented in PyTorch and enables efficient quantized pre-training and fine-tuning of models, achieving results close to full-rank, non-quantized models. 
 
 LoQT allows for the pre-training of a 13B LLM on a 24GB GPU without model parallelism, checkpointing, or offloading strategies during training.
@@ -25,7 +23,6 @@ conda env create -f environment.yml
 ```
 This will create a conda environment with all the necessary packages. Make sure to activate the environment:
 
-
 ```
 conda activate loqt
 ```
@@ -42,14 +39,14 @@ bash scripts/benchmark_pretraining/350m_loqt8bit.sh
 
 ### Adapting Language Models
 
-We provide baseline scripts for tuning Llama2 and Llama3 from Meta.
+We also provide example scripts for tuning Llama2 and Llama3 from Meta.
 
 ```sh
 bash scripts/continued_pretraining/llama2_7b_ic3.sh
 ```
 
 ```sh
-bash /home/vesteinn/projects/loqt/LoQT/scripts/continued_pretraining/llama3_8b_ic3.sh
+bash scripts/continued_pretraining/llama3_8b_ic3.sh
 ```
 
 ### Fine-tuning for Natural Language Understanding
@@ -95,6 +92,13 @@ Continued pre-training example is available in the `scripts/continued_pretrainin
 
 More details can be found in torchrun_main.py for pretraining and run_glue.py for fine-tuning.
 
+### Save Original Non-Quantized Model
+To save the original input model (e.g., a LLaMA2 model) without quantization and the adapters, use the following flag when running the script:
+```sh
+--save_original_model True 
+```
+The original model (original_model.pth) will be saved in the same checkpoint directory as the quantized model with adapters (loqt_model.pth).
+
 ## Memory Usage
 To compare memory usage across different model configuraions, you can run the scripts in the folder `memory_profiling`. This script `all.sh` logs the memory usage of the model with and without quantization for LoQT, GaLore, and the regular Adam optimizer. The memory profiling is done for both 16-bit and 8-bit optimizers. Additionally, for GaLore and LoQT, per-layer gradient updates are also run.
 `13b_rank1024_loqt.sh` logs the memory usage of the 13B model with a rank of 1024 for LoQT.
@@ -130,7 +134,7 @@ To run the benchmark pre-training scripts, navigate to the benchmark_pretraining
 For fine-tuning benchmarks using DeBERTa-v3 on GLUE tasks, navigate to the finetuning_deberta folder. The scripts are named after the task.
 
 ## Acknowledgements 
-Parts of the code are based on the repository by Jiawei Zhao et al.: https://github.com/jiaweizhao/GaLore.
+Parts of the code are based on the repository by Jiawei Zhao et al.: https://github.com/jiaweizzhao/GaLore.
 
 This work was supported by Danish Data Science Academy, which is funded by the Novo Nordisk Foundation (NNF21SA0069429) and VILLUM FONDEN (40516).
 
@@ -139,11 +143,11 @@ This work was supported by Danish Data Science Academy, which is funded by the N
 If you use this codebase in your work, please cite our paper:
 ```bibtex
 @misc{loeschcke2024loqt,
-      title={LoQT: Low Rank Adapters for Quantized Training},
-      author={Sebastian Loeschcke and Mads Toftrup and Michael Kastoryano and Serge Belongie and Vésteinn Snæbjarnarson},
-      year={2024},
-      eprint={INSERT},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+    title={LoQT: Low Rank Adapters for Quantized Training},
+    author={Sebastian Loeschcke and Mads Toftrup and Michael J. Kastoryano and Serge Belongie and Vésteinn Snæbjarnarson},
+    year={2024},
+    eprint={2405.16528},
+    archivePrefix={arXiv},
+    primaryClass={cs.LG}
 }
 ```
