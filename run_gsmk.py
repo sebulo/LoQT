@@ -513,6 +513,7 @@ def main():
             is_single_gpu=args.single_gpu,
             only_train_lora=args.only_train_lora,
             use_offloading=args.use_offloading,
+            grad_accumulation_steps=args.gradient_accumulation_steps,
         )
 
     else:
@@ -558,7 +559,7 @@ def main():
     
     train_dataset = SupervisedDataset(load_dataset("gsm8k", "main", split="train"), tokenizer)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-
+    
     #data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=(8 if accelerator.use_fp16 else None))
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
     

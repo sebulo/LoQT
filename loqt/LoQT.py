@@ -65,7 +65,7 @@ class LoQTModel(nn.Module):
         init_lora_AB_as_random_and_zeros=False,
         train_projection_matrix=False,
         update_steps=[],
-        grad_accumulation_steps = 0,
+        grad_accumulation_steps = None,
     ):
         if r <= 0:
             raise ValueError("r must be positive. If you want r == 0, use the original model.")
@@ -119,6 +119,7 @@ class LoQTModel(nn.Module):
             grad_accumulation_steps = self.grad_accumulation_steps
             
         )
+        assert self.grad_accumulation_steps is not None, "grad_accumulation_steps must be specified"
         
         self._wrap_target_modules()  # Wrap target modules with LoRA Linear layers
         torch.cuda.empty_cache()
@@ -429,7 +430,6 @@ class LoraLinear(nn.Module):
         Hook function called before the forward pass.
         Merge and require grad for W
         """
-
         # Perform the merge operation before the forward pass
         if self.grad_acc_counter == 0:
             self.merge()
