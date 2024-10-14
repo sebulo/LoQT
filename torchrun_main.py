@@ -23,6 +23,7 @@ from tqdm import tqdm
 from loguru import logger
 from nvitop import Device, GpuProcess
 
+from carbontracker.tracker import CarbonTracker
 
 from peft_pretraining import training_utils, args_utils
 from peft_pretraining.dataloader import PreprocessedIterableDataset
@@ -134,6 +135,8 @@ def parse_args(args):
     parser.add_argument('--log_max_memory_steps', type=int, default=1, help="Interval for logging maximum memory usage")
     
     parser.add_argument('--is_icelandic_dataset', default=False, type=lambda x: x.lower() == "true")
+    
+    parser.add_argument('--carbon_tracker_steps', type=int, default=0, help="")
 
     args = parser.parse_args(args)
 
@@ -225,59 +228,6 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     if is_training_at_entry:
         model.train()
     return total_loss, evaluated_on_tokens
-
-
-# @torch.no_grad()
-# def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, device, batch_size, dataset=None):
-#     is_training_at_entry = model.training
-#     model.eval()
-#     _time = time.time()
-#     if dataset is None:
-#         val_data = datasets.load_dataset("c4", "en", split="validation", streaming=True)
-#     else:
-#         val_data = dataset
-#     val_data = val_data.shuffle(seed=42)
-#     logger.info(f"Loaded validation dataset in {time.time() - _time:.2f} seconds")
-
-#     if not args.single_gpu:
-#         val_data = datasets.distributed.split_dataset_by_node(val_data, rank=global_rank, world_size=world_size)
-
-#     val_data_mapped = val_data.map(
-#         preprocess_batched,
-#         batched=True,
-#         remove_columns=["text", "timestamp", "url"],
-#     )
-#     val_data_mapped.batch = lambda batch_size: training_utils.batch_fn(val_data_mapped, batch_size)
-
-#     target_eval_tokens = args.num_eval_tokens
-#     evaluated_on_tokens = 0
-#     total_loss = torch.tensor(0.0).to(device)
-#     total_batches = 1
-#     logger.info(f"Eval set prepared in {time.time() - _time:.2f} seconds")
-
-#     for batch in val_data_mapped.batch(batch_size=batch_size):
-#         if evaluated_on_tokens > target_eval_tokens:
-#             break
-#         total_batches += 1
-
-#         batch = {k: v.to(device) for k, v in batch.items()}
-#         labels = batch["input_ids"].clone()
-#         labels[labels == pad_idx] = -100
-#         loss = model(**batch, labels=labels).loss
-#         total_loss += loss.detach()
-
-#         evaluated_on_tokens += (batch["input_ids"] != pad_idx).sum().item() * world_size
-
-#     total_loss = total_loss / total_batches
-
-#     # Gather losses across all GPUs
-#     gathered_losses = [torch.zeros_like(total_loss) for _ in range(world_size)]
-#     dist.all_gather(gathered_losses, total_loss)
-#     total_loss = sum([t.item() for t in gathered_losses]) / world_size
-
-#     if is_training_at_entry:
-#         model.train()
-#     return total_loss, evaluated_on_tokens
 
 
 
@@ -646,8 +596,12 @@ def main(args):
     
     unique_id = int(time.time())
     unique_directory_name = f"loqt_{unique_id}"
+    
+    tracker = CarbonTracker(epochs=10)
 
     for batch_idx, batch in enumerate(dataloader):
+        if update_step==0 and args.carbon_tracker_steps >0:
+            tracker.epoch_start()
         if batch_idx < skip_batches and args.skip_batches_in_continue_from: 
             continue
  
@@ -763,6 +717,11 @@ def main(args):
             metrics_to_log = {}
             
         update_time = time.time()
+        
+        if args.carbon_tracker_steps >0 and update_step%args.carbon_tracker_steps==0:
+            tracker.epoch_end()
+        
+    tracker.stop()
 
     # ##############################
     # END of training loop
@@ -770,6 +729,9 @@ def main(args):
     logger.info("Training finished")
 
     if global_rank == 0: pbar.close()
+    
+    
+
 
     current_model_directory = f"{args.save_dir}/model_{update_step}"
     if global_rank == 0 and not os.path.exists(current_model_directory): 

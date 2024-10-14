@@ -30,7 +30,7 @@ echo "Hugging Face token has been set as: $HF_TOKEN"
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
   --num_train_epochs 6 \
-  --seed 12 \
+  --seed 22 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -43,7 +43,7 @@ python run_gsmk.py \
   --pad_to_max_length \
   --per_device_train_batch_size 16 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 9e-5 \
+  --learning_rate 5e-5 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\
@@ -56,7 +56,112 @@ python run_gsmk.py \
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
   --num_train_epochs 6 \
-  --seed 12 \
+  --seed 22 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --num_warmup_steps_procentage 0.03 \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 16 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 1e-4 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --use_offloading True\
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb \
+  --hub_token $HF_TOKEN \
+  --experiment_name gsm8k_7b_4bit_quant
+
+  python run_gsmk.py \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --num_train_epochs 6 \
+  --seed 22 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --num_warmup_steps_procentage 0.03 \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 16 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 3e-4 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --use_offloading True\
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb \
+  --hub_token $HF_TOKEN \
+  --experiment_name gsm8k_7b_4bit_quant
+
+python run_gsmk.py \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --num_train_epochs 6 \
+  --seed 22 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --num_warmup_steps_procentage 0.03 \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 16 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 4e-4 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --use_offloading True\
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb \
+  --hub_token $HF_TOKEN \
+  --experiment_name gsm8k_7b_4bit_quant
+
+
+python run_gsmk.py \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --num_train_epochs 6 \
+  --seed 22 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --num_warmup_steps_procentage 0.03 \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 16 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 7e-5 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --use_offloading True\
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb \
+  --hub_token $HF_TOKEN \
+  --experiment_name gsm8k_7b_4bit_quant
+
+python run_gsmk.py \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --num_train_epochs 6 \
+  --seed 22 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -82,139 +187,7 @@ python run_gsmk.py \
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
   --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 6e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 4e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 3e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 2e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 2e-4 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
+  --seed 22 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -240,33 +213,7 @@ python run_gsmk.py \
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
   --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 8e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
+  --seed 22 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -280,110 +227,6 @@ python run_gsmk.py \
   --per_device_train_batch_size 16 \
   --gradient_accumulation_steps 1 \
   --learning_rate 6e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 4e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 3e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 2e-5 \
-  --output_dir checkpoints \
-  --use_loqt true \
-  --use_offloading True\
-  --single_gpu \
-  --with_tracking \
-  --report_to wandb \
-  --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
-
-python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
-  --num_train_epochs 6 \
-  --seed 12 \
-  --lora_r 64 \
-  --lora_alpha 2 \
-  --train_all_params False \
-  --num_warmup_steps_procentage 0.03 \
-  --update_proj_gap 100000 \
-  --max_length 512 \
-  --bnb_4bit_quant_type nf4 \
-  --quantize_w '4bit' \
-  --quantize_projection_matrix '4bit' \
-  --pad_to_max_length \
-  --per_device_train_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --learning_rate 2e-4 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\

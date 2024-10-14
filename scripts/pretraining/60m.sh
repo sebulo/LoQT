@@ -8,10 +8,11 @@ torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
     --update_proj_gap 100 \
     --batch_size 128 \
     --total_batch_size 512 \
-    --num_training_steps 10000 \
+    --num_training_steps 1001 \
+    --scheduler_effective_training_steps 10000\
     --warmup_steps 1000 \
-    --eval_every 1000 \
-    --save_every 1000 \
+    --eval_every 2000 \
+    --save_every 2000 \
     --dtype bfloat16 \
     --optimizer adamw \
     --use_loqt True\
@@ -21,4 +22,21 @@ torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
     --proj_gap_progression "exponential" \
     --increment_size 1.2 \
     --save_original_model True \
+    --name 60m_LoQT
+
+torchrun --standalone --nproc_per_node 2 --nnodes 1 torchrun_main.py \
+    --model_config configs/llama_60m.json \
+    --seed 42 \
+    --lr 0.005 \
+    --update_proj_gap 100 \
+    --batch_size 128 \
+    --total_batch_size 512 \
+    --num_training_steps 1001 \
+    --scheduler_effective_training_steps 10000\
+    --warmup_steps 1000 \
+    --eval_every 2000 \
+    --save_every 2000 \
+    --dtype bfloat16 \
+    --optimizer adamw \
+    --use_loqt False\
     --name 60m_LoQT
