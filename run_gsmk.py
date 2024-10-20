@@ -8,6 +8,8 @@ import random
 from pathlib import Path
 from datetime import datetime
 
+from sklearn.model_selection import train_test_split
+
 import datasets
 # import evaluate
 import torch
@@ -264,7 +266,7 @@ def parse_args():
     parser.add_argument("--train_all_params", default=True)
     parser.add_argument('--eval_subset_dataset', type=float, default=1.0, help="subset to test on")
     parser.add_argument("--run_eval_every_epoch", type=int, default = 1)
-    
+    parser.add_argument("--val_split_percentage", type=float, default=0.1, help="Percentage of the training dataset to use for validation")
     
     
     return parser.parse_args()
@@ -397,11 +399,28 @@ class DataCollatorForSupervisedDataset:
 def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     logger.warning("Downloading Data")
-    dataset = load_dataset(data_args.data_name, "main")
-    train_set = dataset['train']
-    train_dataset = SupervisedDataset(raw_data=train_set, tokenizer=tokenizer)
+    train_set = load_dataset("gsm8k", "main", split="train")
+
+    # Split into train and validation sets
+    train_indices, val_indices = train_test_split(
+        range(len(train_set)), 
+        test_size=data_args.val_split_percentage, 
+        random_state=42
+    )
+    
+    # Use Subset to create new train and validation sets
+    train_subset = torch.utils.data.Subset(train_set, train_indices)
+    val_subset = torch.utils.data.Subset(train_set, val_indices)
+    
+    train_dataset = SupervisedDataset(raw_data=train_subset, tokenizer=tokenizer)
+    val_dataset = SupervisedDataset(raw_data=val_subset, tokenizer=tokenizer)
+    
+    print(f"Train dataset size: {len(train_subset)}")
+    print(f"Validation dataset size: {len(val_subset)}")
+
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-    return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
+
+    return dict(train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=data_collator)
 
 def main():
     args = parse_args()
@@ -554,14 +573,25 @@ def main():
         tokenizer=tokenizer,
         model=model,
     )
-
+    
     # Data Preparation
     
-    train_dataset = SupervisedDataset(load_dataset("gsm8k", "main", split="train"), tokenizer)
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    data_module = make_supervised_data_module(tokenizer, args)
+    train_dataset = data_module['train_dataset']
+    eval_dataset = data_module['eval_dataset']
+    data_collator = data_module['data_collator']
     
-    #data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=(8 if accelerator.use_fp16 else None))
-    train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
+    train_dataloader = DataLoader(
+        train_dataset, 
+        shuffle=True, 
+        collate_fn=data_collator, 
+        batch_size=args.per_device_train_batch_size
+    )
+    validation_dataloader = DataLoader(
+        eval_dataset, 
+        collate_fn=data_collator, 
+        batch_size=args.per_device_eval_batch_size
+    )
     
     # # Optimizer 
     no_decay = ["bias", "LayerNorm.weight"]
@@ -596,8 +626,8 @@ def main():
         num_training_steps=args.max_train_steps,
     )
 
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, validation_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, validation_dataloader, lr_scheduler
     )
 
     ##### TRAINABLE PARAMS #####
@@ -647,6 +677,10 @@ def main():
     # save the model at the beginning
     # if args.output_dir:
     #     accelerator.save_state(args.output_dir)
+
+    # Initialize best_val_loss and best_model_path
+    best_val_loss = float('inf')
+    best_model_path = os.path.join(args.output_dir, "best_model")
 
     # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -716,6 +750,41 @@ def main():
                 if args.with_tracking:
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
                     
+        # Validation
+        model.eval()
+        eval_loss = 0
+        for step, batch in enumerate(validation_dataloader):
+            with torch.no_grad():
+                outputs = model(**batch)
+            eval_loss += outputs.loss.detach().float()
+        eval_loss /= len(validation_dataloader)
+        
+        logger.info(f"Epoch {epoch}: Validation Loss: {eval_loss}")
+        if args.with_tracking:
+            accelerator.log({"val_loss": eval_loss, "epoch": epoch})
+
+        # Check if this is the best model so far
+        if eval_loss < best_val_loss:
+            best_val_loss = eval_loss
+            # Save the best model (overwriting the previous best)
+            accelerator.wait_for_everyone()
+            unwrapped_model = accelerator.unwrap_model(model)
+            if not args.use_loqt:
+                unwrapped_model.save_pretrained(
+                    best_model_path, 
+                    is_main_process=accelerator.is_main_process, 
+                    save_function=accelerator.save
+                )
+            else:
+                model.save_pretrained(
+                    best_model_path, 
+                    save_original_model=args.save_original_model, 
+                    only_save_original_model=True
+                )
+            if accelerator.is_main_process:
+                tokenizer.save_pretrained(best_model_path)
+            logger.info(f"New best model saved at epoch {epoch} with validation loss: {best_val_loss}")
+
         if epoch > 0 and (epoch % args.run_eval_every_epoch == 0 or epoch == args.num_train_epochs - 1):
             print('running evaluation')
             accuracy = run_evaluation(args.output_dir, model, tokenizer, device, args)
@@ -739,6 +808,14 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
+    best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=True)
+    final_best_model_accuracy = run_evaluation(args.output_dir, best_model, tokenizer, device, args, is_loqt=False)
+    logger.info(f"Final best model accuracy: {final_best_model_accuracy}")
+    accelerator.log({"final_best_model_accuracy": final_best_model_accuracy})
+    # After training loop
+    logger.info(f"Best model was saved at: {best_model_path}")
+    logger.info(f"Best validation loss: {best_val_loss}")
+
     if args.with_tracking:
         accelerator.end_training()
 
@@ -753,19 +830,21 @@ def main():
             tokenizer.save_pretrained(args.output_dir)
             if args.push_to_hub:
                 repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
-
-        
+                
     ##########################################################################################
     ##########################################################################################
     ##########################################################################################
     ##########################################################################################
 
-def run_evaluation(model_dir, model,  tokenizer, device, args ):
+def run_evaluation(model_dir, model,  tokenizer, device, args, is_loqt = True ):
     # Find the latest checkpoint directory
     print(f"Using latest checkpoint directory for evaluation: {model_dir}")
     
     # get full model
-    org_model = model.return_original_model()
+    if is_loqt:
+        org_model = model.return_original_model()
+    else:
+        org_model = model
     
     # Move the model off the device
     model.to('cpu')

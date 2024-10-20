@@ -3,14 +3,14 @@ export CUDA_VISIBLE_DEVICES=0
 python run_gsmk.py \
   --model_name_or_path EleutherAI/gpt-neo-1.3B \
   --experiment_name gsmk_gpt-neo-1.3B_seed9876 \
-  --num_train_epochs 6 \
+  --num_train_epochs 3 \
   --seed 9876 \
   --lora_r 32 \
   --lora_alpha 2 \
   --update_proj_gap 1000 \
   --max_length 256 \
   --pad_to_max_length \
-  --per_device_train_batch_size 1 \
+  --per_device_train_batch_size 4 \
   --gradient_accumulation_steps 1 \
   --learning_rate 3e-4 \
   --output_dir checkpoints/gpt-neo-1.3B \
