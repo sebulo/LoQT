@@ -22,10 +22,11 @@
 #put hf token here?
 #$HF_TOKEN=....
 export CUDA_VISIBLE_DEVICES=1
+
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
   --num_train_epochs 6 \
-  --seed 42 \
+  --seed 12345 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -38,7 +39,7 @@ python run_gsmk.py \
   --pad_to_max_length \
   --per_device_train_batch_size 16 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 5e-5 \
+  --learning_rate 6e-5 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\
@@ -47,4 +48,3 @@ python run_gsmk.py \
   --report_to wandb \
   --hub_token $HF_TOKEN \
   --experiment_name gsm8k_7b_4bit_quant
-
