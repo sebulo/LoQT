@@ -266,7 +266,7 @@ def parse_args():
     parser.add_argument("--train_all_params", default=True)
     parser.add_argument('--eval_subset_dataset', type=float, default=1.0, help="subset to test on")
     parser.add_argument("--run_eval_every_epoch", type=int, default = 1)
-    parser.add_argument("--val_split_percentage", type=float, default=0.1, help="Percentage of the training dataset to use for validation")
+    parser.add_argument("--val_split_percentage", type=float, default=0.0, help="Percentage of the training dataset to use for validation")
     
     
     return parser.parse_args()
@@ -395,28 +395,37 @@ class DataCollatorForSupervisedDataset:
 
         return batch
 
-
 def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     logger.warning("Downloading Data")
     train_set = load_dataset("gsm8k", "main", split="train")
 
-    # Split into train and validation sets
-    train_indices, val_indices = train_test_split(
-        range(len(train_set)), 
-        test_size=data_args.val_split_percentage, 
-        random_state=42
-    )
-    
-    # Use Subset to create new train and validation sets
-    train_subset = torch.utils.data.Subset(train_set, train_indices)
-    val_subset = torch.utils.data.Subset(train_set, val_indices)
-    
+    # Initialize the validation dataset
+    val_dataset = None
+
+    # Split into train and validation sets only if val_split_percentage is greater than 0
+    if data_args.val_split_percentage > 0:
+        train_indices, val_indices = train_test_split(
+            range(len(train_set)), 
+            test_size=data_args.val_split_percentage, 
+            random_state=42
+        )
+        
+        # Use Subset to create new train and validation sets
+        train_subset = torch.utils.data.Subset(train_set, train_indices)
+        val_subset = torch.utils.data.Subset(train_set, val_indices)
+
+        print(f"Train dataset size: {len(train_subset)}")
+        print(f"Validation dataset size: {len(val_subset)}")
+    else:
+        # If no validation split, use the entire train set
+        train_subset = train_set
+        print(f"Train dataset size: {len(train_set)}")
+
+    # Create the train dataset and the validation dataset (if it exists)
     train_dataset = SupervisedDataset(raw_data=train_subset, tokenizer=tokenizer)
-    val_dataset = SupervisedDataset(raw_data=val_subset, tokenizer=tokenizer)
-    
-    print(f"Train dataset size: {len(train_subset)}")
-    print(f"Validation dataset size: {len(val_subset)}")
+    if data_args.val_split_percentage > 0:
+        val_dataset = SupervisedDataset(raw_data=val_subset, tokenizer=tokenizer)
 
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 
