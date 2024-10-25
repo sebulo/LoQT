@@ -98,6 +98,7 @@ def set_seed_torch(seed: int):
     torch.cuda.manual_seed_all(seed)
     
     
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a text classification task")
 
@@ -272,6 +273,8 @@ def parse_args():
     return parser.parse_args()
 
 
+
+
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -400,9 +403,35 @@ def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
     logger.warning("Downloading Data")
     train_set = load_dataset("gsm8k", "main", split="train")
 
+    # Split into train and validation sets
+    train_indices, val_indices = train_test_split(
+        range(len(train_set)), 
+        test_size=data_args.val_split_percentage, 
+        random_state=42
+    )
+    
+    # Use Subset to create new train and validation sets
+    train_subset = torch.utils.data.Subset(train_set, train_indices)
+    val_subset = torch.utils.data.Subset(train_set, val_indices)
+    
+    train_dataset = SupervisedDataset(raw_data=train_subset, tokenizer=tokenizer)
+    val_dataset = SupervisedDataset(raw_data=val_subset, tokenizer=tokenizer)
+    
+    print(f"Train dataset size: {len(train_subset)}")
+    print(f"Validation dataset size: {len(val_subset)}")
+
+    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+
+    return dict(train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=data_collator)
+
+def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
+    """Make dataset and collator for supervised fine-tuning."""
+    logger.warning("Downloading Data")
+    train_set = load_dataset("gsm8k", "main", split="train")
+
     # Initialize the validation dataset
     val_dataset = None
-
+    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     # Split into train and validation sets only if val_split_percentage is greater than 0
     if data_args.val_split_percentage > 0:
         train_indices, val_indices = train_test_split(
@@ -426,10 +455,12 @@ def make_supervised_data_module(tokenizer: AutoTokenizer, data_args) -> Dict:
     train_dataset = SupervisedDataset(raw_data=train_subset, tokenizer=tokenizer)
     if data_args.val_split_percentage > 0:
         val_dataset = SupervisedDataset(raw_data=val_subset, tokenizer=tokenizer)
+        return dict(train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=data_collator)
+    else: 
+        return dict(train_dataset=train_dataset,data_collator=data_collator)
 
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    
 
-    return dict(train_dataset=train_dataset, eval_dataset=val_dataset, data_collator=data_collator)
 
 def main():
     args = parse_args()
@@ -587,7 +618,8 @@ def main():
     
     data_module = make_supervised_data_module(tokenizer, args)
     train_dataset = data_module['train_dataset']
-    eval_dataset = data_module['eval_dataset']
+    if args.val_split_percentage > 0:
+        eval_dataset = data_module['eval_dataset']
     data_collator = data_module['data_collator']
     
     train_dataloader = DataLoader(
@@ -596,11 +628,12 @@ def main():
         collate_fn=data_collator, 
         batch_size=args.per_device_train_batch_size
     )
-    validation_dataloader = DataLoader(
-        eval_dataset, 
-        collate_fn=data_collator, 
-        batch_size=args.per_device_eval_batch_size
-    )
+    if args.val_split_percentage > 0:
+        validation_dataloader = DataLoader(
+            eval_dataset, 
+            collate_fn=data_collator, 
+            batch_size=args.per_device_eval_batch_size
+        )
     
     # # Optimizer 
     no_decay = ["bias", "LayerNorm.weight"]
@@ -635,10 +668,14 @@ def main():
         num_training_steps=args.max_train_steps,
     )
 
-    model, optimizer, train_dataloader, validation_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, validation_dataloader, lr_scheduler
-    )
-
+    if args.val_split_percentage > 0:
+        model, optimizer, train_dataloader, validation_dataloader, lr_scheduler = accelerator.prepare(
+                model, optimizer, train_dataloader, validation_dataloader, lr_scheduler
+            )
+    else:
+        model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                model, optimizer, train_dataloader, lr_scheduler
+            )
     ##### TRAINABLE PARAMS #####
     # Check number of trainable params in optimizer
     num_trainable_params = sum(p.numel() for group in optimizer.param_groups for p in group['params'])
@@ -718,6 +755,7 @@ def main():
             #     model.set_LoRA_requires_grad(True)
             #     model.disable_lora(False)
             #     model.lora_zero_init()
+            
 
             outputs = model(**batch)
             loss = outputs.loss
@@ -760,20 +798,21 @@ def main():
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
                     
         # Validation
-        model.eval()
         eval_loss = 0
-        for step, batch in enumerate(validation_dataloader):
-            with torch.no_grad():
-                outputs = model(**batch)
-            eval_loss += outputs.loss.detach().float()
-        eval_loss /= len(validation_dataloader)
+        if args.val_split_percentage >0:
+            model.eval()
+            for step, batch in enumerate(validation_dataloader):
+                with torch.no_grad():
+                    outputs = model(**batch)
+                eval_loss += outputs.loss.detach().float()
+            eval_loss /= len(validation_dataloader)
         
-        logger.info(f"Epoch {epoch}: Validation Loss: {eval_loss}")
-        if args.with_tracking:
-            accelerator.log({"val_loss": eval_loss, "epoch": epoch})
+            logger.info(f"Epoch {epoch}: Validation Loss: {eval_loss}")
+            if args.with_tracking:
+                accelerator.log({"val_loss": eval_loss, "epoch": epoch})
 
         # Check if this is the best model so far
-        if eval_loss < best_val_loss:
+        if args.val_split_percentage > 0 and eval_loss < best_val_loss:
             best_val_loss = eval_loss
             # Save the best model (overwriting the previous best)
             accelerator.wait_for_everyone()
@@ -816,9 +855,14 @@ def main():
             if args.output_dir is not None:
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
-
-    best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=True)
+            
+    
+    if args.val_split_percentage > 0
+        best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=True)
+    else:
+        best_model = model
     final_best_model_accuracy = run_evaluation(args.output_dir, best_model, tokenizer, device, args, is_loqt=False)
+        
     logger.info(f"Final best model accuracy: {final_best_model_accuracy}")
     accelerator.log({"final_best_model_accuracy": final_best_model_accuracy})
     # After training loop
