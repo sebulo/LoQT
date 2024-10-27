@@ -26,7 +26,7 @@ export HF_TOKEN
 echo "Hugging Face token has been set as: $HF_TOKEN"
 
 python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-13b-hf \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
   --num_train_epochs 3 \
   --seed 42 \
   --lora_r 64 \
@@ -49,7 +49,7 @@ python run_gsmk.py \
   --with_tracking \
   --report_to wandb \
   --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_13b_4bit_quant
+  --experiment_name gsm8k_7b_4bit_quant
 
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-7b-hf \
@@ -68,6 +68,59 @@ python run_gsmk.py \
   --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
   --learning_rate 5e-5 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --use_offloading True\
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb \
+  --hub_token $HF_TOKEN \
+  --experiment_name gsm8k_7b_4bit_quant
+
+python run_gsmk.py \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --num_train_epochs 3 \
+  --seed 42 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --num_warmup_steps_procentage 0.03 \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 8 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 4e-4 \
+  --output_dir checkpoints \
+  --use_loqt true \
+  --use_offloading True\
+  --single_gpu \
+  --with_tracking \
+  --report_to wandb \
+  --hub_token $HF_TOKEN \
+  --experiment_name gsm8k_7b_4bit_quant
+
+
+python run_gsmk.py \
+  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --num_train_epochs 3 \
+  --seed 42 \
+  --lora_r 64 \
+  --lora_alpha 2 \
+  --train_all_params False \
+  --num_warmup_steps_procentage 0.03 \
+  --update_proj_gap 100000 \
+  --max_length 512 \
+  --bnb_4bit_quant_type nf4 \
+  --quantize_w '4bit' \
+  --quantize_projection_matrix '4bit' \
+  --pad_to_max_length \
+  --per_device_train_batch_size 8 \
+  --gradient_accumulation_steps 1 \
+  --learning_rate 7e-5 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\

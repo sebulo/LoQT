@@ -39,7 +39,7 @@ echo "Hugging Face token has been set as: $HF_TOKEN"
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 16 \
+  --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
   --learning_rate 1e-4 \
   --output_dir checkpoints \
@@ -65,7 +65,7 @@ echo "Hugging Face token has been set as: $HF_TOKEN"
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 16 \
+  --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
   --learning_rate 3e-4 \
   --output_dir checkpoints \

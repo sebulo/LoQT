@@ -812,28 +812,28 @@ def main():
                 accelerator.log({"val_loss": eval_loss, "epoch": epoch})
 
         # Check if this is the best model so far
-        if args.val_split_percentage > 0 and eval_loss < best_val_loss:
-            best_val_loss = eval_loss
-            # Save the best model (overwriting the previous best)
-            accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            if not args.use_loqt:
-                unwrapped_model.save_pretrained(
-                    best_model_path, 
-                    is_main_process=accelerator.is_main_process, 
-                    save_function=accelerator.save
-                )
-            else:
-                model.save_pretrained(
-                    best_model_path, 
-                    save_original_model=args.save_original_model, 
-                    only_save_original_model=True
-                )
-            if accelerator.is_main_process:
-                tokenizer.save_pretrained(best_model_path)
-            logger.info(f"New best model saved at epoch {epoch} with validation loss: {best_val_loss}")
+        #if (args.val_split_percentage > 0 and eval_loss < best_val_loss) or (epoch-1 == args.num_train_epochs and args.val_split_percentage == 0):
+        #best_val_loss = eval_loss
+        # Save the best model (overwriting the previous best)
+        accelerator.wait_for_everyone()
+        unwrapped_model = accelerator.unwrap_model(model)
+        if not args.use_loqt:
+            unwrapped_model.save_pretrained(
+                best_model_path, 
+                is_main_process=accelerator.is_main_process, 
+                save_function=accelerator.save
+            )
+        else:
+            model.save_pretrained(
+                best_model_path, 
+                save_original_model=args.save_original_model, 
+                only_save_original_model=True
+            )
+        if accelerator.is_main_process:
+            tokenizer.save_pretrained(best_model_path)
+        #logger.info(f"New best model saved at epoch {epoch} with validation loss: {best_val_loss}")
 
-        if epoch > 0 and (epoch % args.run_eval_every_epoch == 0 or epoch == args.num_train_epochs - 1):
+        if epoch > 0 and ((epoch % args.run_eval_every_epoch == 0) or (epoch == args.num_train_epochs - 1)):
             print('running evaluation')
             accuracy = run_evaluation(args.output_dir, model, tokenizer, device, args)
             if accuracy > best_acc:
@@ -856,13 +856,10 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
             
-    
-    if args.val_split_percentage > 0
-        best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=True)
-    else:
-        best_model = model
+
+
+    best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=True)
     final_best_model_accuracy = run_evaluation(args.output_dir, best_model, tokenizer, device, args, is_loqt=False)
-        
     logger.info(f"Final best model accuracy: {final_best_model_accuracy}")
     accelerator.log({"final_best_model_accuracy": final_best_model_accuracy})
     # After training loop
