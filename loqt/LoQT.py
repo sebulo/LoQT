@@ -10,11 +10,12 @@ import torch.distributed as dist
 from loqt.utils import create_zero_initialized_linear_layer, eigenH_decomposition
 from loqt.bnb_with_gradient import LinearNF4WithGradient
 import copy
-import time
 import torch.distributed as dist
 from loqt.utils import broadcast_parameters
 from collections import OrderedDict
 from typing import Dict, Callable
+import time
+
 
 # Global variable to store the cumulative time for merge operations
 cumulative_merge_time = 0.0
