@@ -33,8 +33,8 @@ python run_gsmk.py \
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 4 \
-  --gradient_accumulation_steps 2 \
+  --per_device_train_batch_size 8 \
+  --gradient_accumulation_steps 1 \
   --learning_rate 5e-5 \
   --output_dir checkpoints \
   --use_loqt true \

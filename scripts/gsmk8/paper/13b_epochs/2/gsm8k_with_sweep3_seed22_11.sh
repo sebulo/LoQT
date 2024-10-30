@@ -28,7 +28,7 @@ echo "Hugging Face token has been set as: $HF_TOKEN"
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-13b-hf \
   --num_train_epochs 3 \
-  --seed 42 \
+  --seed 22 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -41,7 +41,7 @@ python run_gsmk.py \
   --pad_to_max_length \
   --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 7e-5 \
+  --learning_rate 4e-4 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\
@@ -51,10 +51,11 @@ python run_gsmk.py \
   --hub_token $HF_TOKEN \
   --experiment_name gsm8k_13b_4bit_quant
 
+
 python run_gsmk.py \
-  --model_name_or_path meta-llama/Llama-2-7b-hf \
+  --model_name_or_path meta-llama/Llama-2-13b-hf \
   --num_train_epochs 3 \
-  --seed 42 \
+  --seed 11 \
   --lora_r 64 \
   --lora_alpha 2 \
   --train_all_params False \
@@ -67,7 +68,7 @@ python run_gsmk.py \
   --pad_to_max_length \
   --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 5e-5 \
+  --learning_rate 4e-4 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\
@@ -75,4 +76,5 @@ python run_gsmk.py \
   --with_tracking \
   --report_to wandb \
   --hub_token $HF_TOKEN \
-  --experiment_name gsm8k_7b_4bit_quant
+  --experiment_name gsm8k_13b_4bit_quant
+

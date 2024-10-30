@@ -720,10 +720,6 @@ def main():
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
     
-    # save the model at the beginning
-    # if args.output_dir:
-    #     accelerator.save_state(args.output_dir)
-
     # Initialize best_val_loss and best_model_path
     best_val_loss = float('inf')
     best_model_path = os.path.join(args.output_dir, "best_model")
@@ -739,23 +735,6 @@ def main():
         active_dataloader = train_dataloader
 
         for step, batch in enumerate(active_dataloader):
-            # completed_steps is update_step and global_step is step
-            # should_reset_B = (
-            #     args.use_loqt and 
-            #     completed_steps in update_steps and
-            #     completed_steps % args.update_proj_gap == 0 and 
-            #     step % args.gradient_accumulation_steps == 0
-            # )
-
-            # if should_reset_B:
-            #     logger.info(f"Resetting B matrix at step {completed_steps}")
-            #     model.merge()
-            #     optimizer.zero_grad()
-            #     model.set_W_requires_grad(True)
-            #     model.set_LoRA_requires_grad(True)
-            #     model.disable_lora(False)
-            #     model.lora_zero_init()
-            
 
             outputs = model(**batch)
             loss = outputs.loss
@@ -765,17 +744,8 @@ def main():
             accelerator.backward(loss)
             
             if step % args.gradient_accumulation_steps != 0:
-                # if step != 0:
-                #     assert not should_reset_B
                 continue
 
-            # if should_reset_B:
-            #     model.reinitialize_LoRA_AB_after_merge()
-            #     optimizer.zero_grad()
-            #     model.set_W_requires_grad(False)
-            #     model.set_LoRA_requires_grad(True)
-            #     model.disable_lora(False)
-            #     print('num_trainable_params: ', sum(p.numel() for p in model.parameters() if p.requires_grad))
             elif (step+1) % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()
@@ -797,23 +767,6 @@ def main():
                 if args.with_tracking:
                     accelerator.log({"train_loss": loss.item(), "step": completed_steps})
                     
-        # Validation
-        eval_loss = 0
-        if args.val_split_percentage >0:
-            model.eval()
-            for step, batch in enumerate(validation_dataloader):
-                with torch.no_grad():
-                    outputs = model(**batch)
-                eval_loss += outputs.loss.detach().float()
-            eval_loss /= len(validation_dataloader)
-        
-            logger.info(f"Epoch {epoch}: Validation Loss: {eval_loss}")
-            if args.with_tracking:
-                accelerator.log({"val_loss": eval_loss, "epoch": epoch})
-
-        # Check if this is the best model so far
-        #if (args.val_split_percentage > 0 and eval_loss < best_val_loss) or (epoch-1 == args.num_train_epochs and args.val_split_percentage == 0):
-        #best_val_loss = eval_loss
         # Save the best model (overwriting the previous best)
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
@@ -864,7 +817,6 @@ def main():
     accelerator.log({"final_best_model_accuracy": final_best_model_accuracy})
     # After training loop
     logger.info(f"Best model was saved at: {best_model_path}")
-    logger.info(f"Best validation loss: {best_val_loss}")
 
     if args.with_tracking:
         accelerator.end_training()
