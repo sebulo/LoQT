@@ -27,10 +27,10 @@ echo "Hugging Face token has been set as: $HF_TOKEN"
 
 python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-13b-hf \
-  --num_train_epochs 6 \
+  --num_train_epochs 3 \
   --seed 42 \
   --lora_r 64 \
-  --lora_alpha 2 \
+  --lora_alpha 0.25 \
   --train_all_params False \
   --num_warmup_steps_procentage 0.03 \
   --update_proj_gap 100000 \
@@ -39,7 +39,7 @@ python run_gsmk.py \
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 16 \
+  --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
   --learning_rate 4e-4 \
   --output_dir checkpoints \
@@ -51,13 +51,12 @@ python run_gsmk.py \
   --hub_token $HF_TOKEN \
   --experiment_name gsm8k_13b_4bit_quant
 
-
-python run_gsmk.py \
+  python run_gsmk.py \
   --model_name_or_path meta-llama/Llama-2-13b-hf \
-  --num_train_epochs 6 \
-  --seed 42 \
+  --num_train_epochs 3 \
+  --seed 22 \
   --lora_r 64 \
-  --lora_alpha 2 \
+  --lora_alpha 0.25 \
   --train_all_params False \
   --num_warmup_steps_procentage 0.03 \
   --update_proj_gap 100000 \
@@ -66,9 +65,9 @@ python run_gsmk.py \
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
   --pad_to_max_length \
-  --per_device_train_batch_size 16 \
+  --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
-  --learning_rate 7e-5 \
+  --learning_rate 4e-4 \
   --output_dir checkpoints \
   --use_loqt true \
   --use_offloading True\
