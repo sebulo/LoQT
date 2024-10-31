@@ -723,6 +723,7 @@ def main():
     # Initialize best_val_loss and best_model_path
     best_val_loss = float('inf')
     best_model_path = os.path.join(args.output_dir, "best_model")
+    final_best_model_accuracy = None
 
     # Your training loop
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -794,6 +795,14 @@ def main():
             accelerator.log({"eval accuracy": accuracy, "step": completed_steps, "epoch": epoch, "best eval accuracy": best_acc})
             logger.info(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
             print(f"epoch {epoch}, acc GSM8K test accuracy: {100 * accuracy:.2f}%")
+            # did eval on last epoc
+            if epoch == args.num_train_epochs - 1 and args.val_split_percentage == 0:
+                final_best_model_accuracy = accuracy
+                logger.info(f"Final best model accuracy: {final_best_model_accuracy}")
+                accelerator.log({"final_best_model_accuracy": final_best_model_accuracy})
+                # After training loop
+                logger.info(f"Best model was saved at: {best_model_path}")
+
 
         if args.with_tracking:
             log_data = {
@@ -810,9 +819,12 @@ def main():
             accelerator.save_state(output_dir)
             
 
-
-    best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=True)
-    final_best_model_accuracy = run_evaluation(args.output_dir, best_model, tokenizer, device, args, is_loqt=False)
+    if args.val_split_percentage >0:
+        best_model = LoQTModel.from_pretrained(best_model_path, device=device, saved_as_full_model=False)
+    else:
+        best_model = model
+    if final_best_model_accuracy is None:
+        final_best_model_accuracy = run_evaluation(args.output_dir, best_model, tokenizer, device, args, is_loqt=False)
     logger.info(f"Final best model accuracy: {final_best_model_accuracy}")
     accelerator.log({"final_best_model_accuracy": final_best_model_accuracy})
     # After training loop
