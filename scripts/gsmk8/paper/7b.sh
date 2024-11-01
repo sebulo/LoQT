@@ -32,7 +32,7 @@ python run_gsmk.py \
   --num_train_epochs 3 \
   --seed 42 \
   --lora_r 64 \
-  --lora_alpha 0.25 \
+  --lora_alpha 16 \
   --train_all_params False \
   --num_warmup_steps_procentage 0.03 \
   --update_proj_gap 100000 \
