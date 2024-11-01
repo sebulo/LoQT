@@ -194,3 +194,6 @@ loqt/LoQT2.py
 loqt/LoQT_global_hooks.py
 scripts/pretraining/p1
 loqt/LoQT_global_hooks.py
+
+scripts/tests
+scripts/test_files
