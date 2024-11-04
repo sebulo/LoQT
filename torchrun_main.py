@@ -198,7 +198,7 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
     target_eval_tokens = args.num_eval_tokens
     evaluated_on_tokens = 0
     total_loss = torch.tensor(0.0).to(device)
-    total_batches = 1 # should be 0 but galore uses 1
+    total_batches = 1 
     logger.info(f"Eval set prepared in {time.time() - _time:.2f} seconds")
 
     for batch in val_data_mapped.batch(batch_size=batch_size):
@@ -214,7 +214,6 @@ def evaluate_model(model, preprocess_batched, pad_idx, global_rank, world_size, 
 
         evaluated_on_tokens += (batch["input_ids"] != pad_idx).sum().item() * world_size
 
-    #total_loss = total_loss / max(total_batches, 1) #  should be like this but galore uses term below
     total_loss = total_loss / total_batches
 
     # Gather losses across all GPUs
