@@ -6,7 +6,7 @@ python run_glue.py \
   --seed 9876 \
   --lora_r 32 \
   --lora_alpha 2 \
-  --update_proj_gap 10 \
+  --update_proj_gap 2400 \
   --bnb_4bit_quant_type nf4 \
   --quantize_w '4bit' \
   --quantize_projection_matrix '4bit' \
