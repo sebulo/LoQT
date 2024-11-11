@@ -10,6 +10,15 @@ import torch.distributed as dist
 from loqt.utils import create_zero_initialized_linear_layer, eigenH_decomposition
 from loqt.bnb_with_gradient import LinearNF4WithGradient
 import copy
+import torch.distributed as dist
+from loqt.utils import broadcast_parameters
+from collections import OrderedDict
+from typing import Dict, Callable
+import time
+
+
+# Global variable to store the cumulative time for merge operations
+cumulative_merge_time = 0.0
 
 @dataclass
 class LoQT_Config:
@@ -29,6 +38,8 @@ class LoQT_Config:
     use_eigenh_for_projection: bool = False
     init_lora_AB_as_random_and_zeros: bool = False
     train_projection_matrix: bool = False
+    grad_accumulation_steps: int = 0
+    
 
 class LoQTModel(nn.Module):
     def __init__(
@@ -53,7 +64,9 @@ class LoQTModel(nn.Module):
         model_config=None,
         use_eigenh_for_projection=False,
         init_lora_AB_as_random_and_zeros=False,
-        train_projection_matrix=False
+        train_projection_matrix=False,
+        update_steps=[],
+        grad_accumulation_steps = None,
     ):
         if r <= 0:
             raise ValueError("r must be positive. If you want r == 0, use the original model.")
@@ -71,14 +84,21 @@ class LoQTModel(nn.Module):
         self.proj_type = proj_type
         self.quantize_w = quantize_w
         self.quantize_projection_matrix = quantize_projection_matrix
+        self.compensate_quant_error_iterations = compensate_quant_error_iterations
         self.use_offloading = use_offloading
         self.is_single_gpu = is_single_gpu
         self.only_train_lora = only_train_lora
         self.model_config = model_config
+        self.compute_dtype = compute_dtype
+        self.use_double_quant=use_double_quant
         self.use_eigenh_for_projection = use_eigenh_for_projection
         self.init_lora_AB_as_random_and_zeros = init_lora_AB_as_random_and_zeros
         self.train_projection_matrix = train_projection_matrix
-
+        self.grad_accumulation_steps = grad_accumulation_steps
+        self.update_steps = [u*grad_accumulation_steps for u in update_steps]
+        print('grad_accumulation_steps: ', grad_accumulation_steps)
+        print('Update steps adjusted by gradient accumulation: ', self.update_steps)
+        
         # Initialize the configuration with the given parameters
         self._config = LoQT_Config(
             r=r,
@@ -96,48 +116,45 @@ class LoQTModel(nn.Module):
             only_train_lora = only_train_lora,
             use_eigenh_for_projection=use_eigenh_for_projection,
             init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
-            train_projection_matrix=train_projection_matrix
-        )
-
-        target_modules_list = target_modules
-        if isinstance(target_modules_list, str):
-            target_modules_list = [target_modules_list]
-
-        for module_name, module in self.wrapped_model.named_modules():
+            train_projection_matrix=train_projection_matrix,
+            grad_accumulation_steps = self.grad_accumulation_steps
             
-            if not isinstance(module, nn.Linear):
-                continue
-
-            if not any(target_key in module_name for target_key in target_modules_list):
-                continue
-
-            new_module = LoraLinear(
-                module,
-                r=self.r,
-                lora_alpha = lora_alpha,
-                proj_type = self.proj_type,
-                device = self.device,
-                quantize_w=quantize_w,
-                use_double_quant=use_double_quant,
-                bnb_4bit_quant="nf4",
-                compute_dtype=compute_dtype,
-                quantize_projection_matrix = quantize_projection_matrix,
-                compensate_quant_error_iterations = compensate_quant_error_iterations,
-                use_offloading = self.use_offloading,
-                is_single_gpu=is_single_gpu,
-                use_eigenh_for_projection=use_eigenh_for_projection,
-                init_lora_AB_as_random_and_zeros=init_lora_AB_as_random_and_zeros,
-                train_projection_matrix=train_projection_matrix,
-            )
-
-            del module
-
-            parent = self._get_parent(module_name)
-            module_suffix = module_name.split(".")[-1]
-            setattr(parent, module_suffix, new_module)
-
+        )
+        assert self.grad_accumulation_steps is not None, "grad_accumulation_steps must be specified"
+        
+        self._wrap_target_modules()  # Wrap target modules with LoRA Linear layers
         torch.cuda.empty_cache()
 
+    def _wrap_target_modules(self):
+        """Wrap target modules with LoraLinear."""
+        target_modules_list = self.target_modules if isinstance(self.target_modules, list) else [self.target_modules]
+        for module_name, module in self.wrapped_model.named_modules():
+            if isinstance(module, nn.Linear) and any(target in module_name for target in target_modules_list):
+                new_module = LoraLinear(
+                    module,
+                    r=self.r,
+                    lora_alpha=self.lora_alpha,
+                    proj_type=self.proj_type,
+                    device=self.device,
+                    quantize_w=self.quantize_w,
+                    use_double_quant=self.use_double_quant,
+                    compute_dtype=self.compute_dtype,
+                    bnb_4bit_quant="nf4",
+                    quantize_projection_matrix=self.quantize_projection_matrix,
+                    compensate_quant_error_iterations=self.compensate_quant_error_iterations,
+                    use_offloading=self.use_offloading,
+                    is_single_gpu=self.is_single_gpu,
+                    use_eigenh_for_projection=self.use_eigenh_for_projection,
+                    init_lora_AB_as_random_and_zeros=self.init_lora_AB_as_random_and_zeros,
+                    train_projection_matrix=self.train_projection_matrix,
+                    update_steps=self.update_steps,
+                    grad_accumulation_steps=self.grad_accumulation_steps
+                )
+                parent = self._get_parent(module_name)
+                module_suffix = module_name.split(".")[-1]
+                setattr(parent, module_suffix, new_module)
+
+    
     def _get_parent(self, module_name):
         module_names_list = module_name.split(".")
         parent_name = ".".join(module_names_list[:-1])
@@ -200,14 +217,15 @@ class LoQTModel(nn.Module):
                 repr_str += f"\n  ({name}): {param.size()}"
         return repr_str
     
-    def save_pretrained(self, path, save_original_model=False):
+    def save_pretrained(self, path, save_original_model=False, only_save_original_model=False):
         # Ensure all parameters are contiguous
         make_tensors_contiguous(self.wrapped_model)
         os.makedirs(path, exist_ok=True)
         if save_original_model:
             model_to_save = self.return_original_model()
             torch.save(model_to_save, os.path.join(path, "original_model.pth"))
-        torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
+        if not only_save_original_model:
+            torch.save(self, os.path.join(path, "pytorch_model_full.pth"))
         # Save additional configuration
         with open(os.path.join(path, "loqt_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
@@ -263,6 +281,7 @@ class LoQTModel(nn.Module):
     
 
     def to(self, *args, **kwargs):
+        print(f"Calling to() on {self.__class__.__name__}")
         super().to(*args, **kwargs)
         device = args[0] if args else kwargs.get("device", None)
         self.device = device
@@ -322,6 +341,12 @@ class LoQTModel(nn.Module):
         print(f"Float32 params: {num_float32_params}, BFloat16 params: {num_bfloat16_params}, Int8 params: {num_int8_params}")
         return total_MB
 
+    def print_and_reset_cumulative_merge_time(self):
+        if dist.get_rank() == 0:
+            global cumulative_merge_time
+            print(f"Total time for merge operations: {cumulative_merge_time:.4f} seconds")
+            cumulative_merge_time = 0.0  # Reset for the next iteration
+
 
     
 class LoraLinear(nn.Module):
@@ -342,7 +367,9 @@ class LoraLinear(nn.Module):
             is_single_gpu=False,
             use_eigenh_for_projection=False,
             init_lora_AB_as_random_and_zeros=False,
-            train_projection_matrix=False
+            train_projection_matrix=False,
+            update_steps=[],
+            grad_accumulation_steps=1,
         ):
         super().__init__()
         assert isinstance(W, nn.Linear)
@@ -372,11 +399,82 @@ class LoraLinear(nn.Module):
         self.compensate_quant_error_iterations = compensate_quant_error_iterations
         self.is_single_gpu = is_single_gpu
         self.use_eigenh_for_projection = use_eigenh_for_projection
+        self.update_steps = update_steps
+        self.grad_accumulation_steps=grad_accumulation_steps
+        self.grad_acc_counter = 0
+        self.grad_step_counter = 0
         
         
         # Determine the method and parameters for projection matrix computation
         self.projection_method = 'eigh' if self.use_eigenh_for_projection else 'svd'
         self.projection_out = 'u' if self.proj_type == 'left' else 'v'
+        
+        # start by attaching hooks
+        self.attach_hooks()
+        
+    def attach_hooks(self):
+        """
+        Attach forward and backward hooks to the layer.
+        """
+        self.forward_hook_handle = self.register_forward_pre_hook(self._forward_pre_hook)
+        self.backward_hook_handle = self.register_full_backward_hook(self._backward_hook)
+        
+    def remove_hooks(self):
+        self._forward_hooks: Dict[int, Callable] = OrderedDict()
+        self._forward_pre_hooks: Dict[int, Callable] = OrderedDict()
+        self._backward_hooks: Dict[int, Callable] = OrderedDict()
+        self.grad_acc_counter = 0
+
+
+    def _forward_pre_hook(self, module, input):
+        """
+        Hook function called before the forward pass.
+        Merge and require grad for W
+        """
+        # Perform the merge operation before the forward pass
+        if self.grad_acc_counter == 0:
+            self.merge()
+            self.set_W_requires_grad(True)
+        self.grad_acc_counter += 1
+        
+        
+    def _backward_hook(self, module, grad_input, grad_output):
+        """
+        Hook function that is called after gradients are computed.
+        Reinitialize AB 
+        """
+        if self.grad_acc_counter == self.grad_accumulation_steps:
+            self.reinitialize_LoRA_AB_after_merge()
+            self.set_W_requires_grad(False)
+
+            if not self.is_single_gpu:
+                dist.barrier()
+                broadcast_parameters(self, dist.get_rank())  # Replace 0 with appropriate local rank
+
+            #import gc
+            #gc.collect()
+            #torch.cuda.empty_cache()
+            
+            self.set_all_grads_to_zero() # such that next optimizer.step has no effect
+            
+            # Detach hooks after execution
+            self.remove_hooks()
+            
+    def set_all_grads_to_zero(self):
+        for module in self.modules():
+            # check if module requires grad or if it is a quantized layer with require_grad_W
+            # if yes set the grad to zeros array
+            if isinstance(module, LoraLinear):
+                module.lora_A.weight.grad = torch.zeros_like(module.lora_A.weight)
+                module.lora_B.weight.grad = torch.zeros_like(module.lora_B.weight)
+                if module.quantize_w == '4bit':
+                    if isinstance(module.W, LinearNF4WithGradient):
+                        module.W.weight_grad = torch.zeros_like(module.W.weight_grad)
+                    else:
+                        module.W.weight.grad = torch.zeros_like(module.W.weight.grad)
+                elif module.W.weight.grad: 
+                    module.W.weight.grad = torch.zeros_like(module.W.weight.grad)
+            
         
     def validate_inputs(self, W, proj_type):
         if not isinstance(W, nn.Linear):
@@ -386,8 +484,8 @@ class LoraLinear(nn.Module):
         # Quantize_projection_matrix and train_projection_matrix should not both be True
         if self.quantize_projection_matrix and self.train_projection_matrix:
             raise ValueError("quantize_projection_matrix and train_projection_matrix cannot both be True")
-        if self.init_lora_AB_as_random_and_zeros and not self.train_projection_matrix:
-            raise ValueError("init_lora_AB_as_random_and_zeros can only be True when train_projection_matrix is True")
+        #if self.init_lora_AB_as_random_and_zeros and not self.train_projection_matrix:
+            #raise ValueError("init_lora_AB_as_random_and_zeros can only be True when train_projection_matrix is True")
 
     
     def determine_projection_type(self, W, proj_type):
@@ -427,7 +525,7 @@ class LoraLinear(nn.Module):
             self.lora_A.weight.requires_grad = flag
             self.lora_B.weight.requires_grad = flag
             self.lora_params_disabled = False
-        elif flag:
+        elif flag is True: # had problems if just saying elif flag TODO
             # Set requires_grad for LoRA layers based on the projection type
             if self.proj_type == 'left': 
                 self.lora_A.weight.requires_grad = False
@@ -466,6 +564,11 @@ class LoraLinear(nn.Module):
         return lora_A, lora_B
     
     def forward(self, X):
+        if self.training: # should not count in eval step
+            self.grad_step_counter += 1
+            if self.grad_step_counter in self.update_steps:
+                self.attach_hooks()
+                
         if self.lora_params_disabled:
             return self.W(X)
         
@@ -474,6 +577,7 @@ class LoraLinear(nn.Module):
         lora_A_output = self.lora_A(X)
         lora_output = self.lora_B(lora_A_output)
         
+            
         # return W_output.add_(self.scaling * lora_output)  # In-place addition
         return W_output + (self.scaling*lora_output)
     
@@ -546,7 +650,7 @@ class LoraLinear(nn.Module):
     @torch.no_grad()
     def merge(self):
         self.maybe_dequantize_LoRA_factors()  # Dequantizes lora_A and lora_B if quantized
-        
+
         if not self.is_single_gpu:
             # Perform distributed averaging to ensure a consistent state across all nodes
             dist.all_reduce(self.lora_A.weight.data, op=dist.ReduceOp.AVG) 
@@ -563,7 +667,7 @@ class LoraLinear(nn.Module):
         torch.cuda.empty_cache()
 
         if self.quantize_w is None:
-            # self.W.weight.data = torch.ones_like(self.W.weight.data)
+            # self.W.weight.data = torch.ones_like(self.W.weinght.data)
             self.W.weight.data.add_(AB)
             self.full_precision_W = self.W.weight.data.detach().clone().to(self.offload_device)
             self.full_precision_W.requires_grad = False
@@ -577,13 +681,12 @@ class LoraLinear(nn.Module):
                 self.W.weight.data, self.W.weight.quant_state = bnb_F.quantize_4bit(new_W, quant_type=self.bnb_4bit_quant_type)
                 del new_W
                 del W_deq
+                
         torch.cuda.synchronize()
-
         
     def set_W_requires_grad(self, requires_grad):
         # Reset gradient for W as it's not tracked by optimizer.
         self.W.weight.grad = None
-
         # Handle quantization-specific settings
         if self.quantize_w == '4bit':
             if isinstance(self.W, LinearNF4WithGradient):
@@ -592,7 +695,7 @@ class LoraLinear(nn.Module):
                     self.W.weight_grad = torch.zeros(
                         (self.out_features, self.in_features),
                         device=self.offload_device,
-                        requires_grad=False,
+                        requires_grad=True,
                         dtype=self.compute_dtype
                     )
                     self.W.require_grad_W = torch.tensor(True, device=self.device, requires_grad=False)
@@ -611,24 +714,86 @@ class LoraLinear(nn.Module):
             self.W.bias.requires_grad = True
     
     def reinitialize_LoRA_AB_after_merge(self):
+        global cumulative_merge_time
+        
+        time_start = time.time()
         if self.init_lora_AB_as_random_and_zeros:
             self.initialize_LoRA_AB_random_and_zero()
         else:
             self.init_LoRA_with_gradient_projections()
+                
+        time_end = time.time()  # End timing
+        # Update the global cumulative merge time
+        cumulative_merge_time += time_end - time_start
             
+    # def initialize_LoRA_AB_random_and_zero(self):
+    #     #breakpoint()
+    #     if self.proj_type == 'left':
+    #         # Use the shape of lora_A for initialization
+    #         self.lora_A.weight.data = torch.empty(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
+    #         torch.nn.init.trunc_normal_(self.lora_A.weight.data, mean=0.0, std=0.02)
+            
+    #         # Use the shape of lora_B and normalize by rank
+    #         self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype) 
+            
+    #     else:
+    #         # Use the shape of lora_A and normalize by rank
+    #         self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype) 
+            
+    #         # Use the shape of lora_B for initialization
+    #         self.lora_B.weight.data = torch.empty(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+    #         torch.nn.init.trunc_normal_(self.lora_B.weight.data, mean=0.0, std=0.02)
+            
+    #     self.set_LoRA_requires_grad(True)
+            
+
+    def initialize_LoRA_AB_random_orthonormal_and_zero(self):
+        # Get the rank from the shape of lora_A or lora_B
+        r = self.lora_A_shape[1] if self.proj_type == 'left' else self.lora_B_shape[0]
+        w_shape = self.W.weight.shape  # Assuming W is an existing layer with a defined shape
+
+        # Generate a random orthonormal matrix of size NxN using float32 for stability
+        orthogonal_matrix = torch.randn(w_shape[0], w_shape[1], device=self.device, dtype=torch.float32)
+        Q, _ = torch.qr(orthogonal_matrix)
+        
+        breakpoint()
+
+        # Convert Q back to the desired compute_dtype
+        Q = Q.to(self.compute_dtype)
+
+        if self.proj_type == 'left':
+            # Initialize lora_A with truncated orthonormal matrix
+            self.lora_A.weight.data = Q[:, :r]
+            
+            # Initialize lora_B to zeros
+            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+            
+        else:
+            # Initialize lora_A to zeros
+            self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
+            
+            # Initialize lora_B with truncated orthonormal matrix
+            self.lora_B.weight.data = Q[:, :r]
+            
+        self.set_LoRA_requires_grad(True)
+        
     def initialize_LoRA_AB_random_and_zero(self):
+        breakpoint()
         if self.proj_type == 'left':
             self.lora_A.weight.data = torch.randn(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
-            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
+            # and divide by math.sqrt(rank)
+            self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype) / torch.sqrt(torch.tensor(self.r, dtype=torch.float))
         else:
             self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
-            self.lora_B.weight.data = torch.randn(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
-    
+            self.lora_B.weight.data = torch.randn(self.lora_B_shape, device=self.device, dtype=self.compute_dtype) / torch.sqrt(torch.tensor(self.r, dtype=torch.float))
+
+        self.set_LoRA_requires_grad(True)
+        
     def init_LoRA_with_gradient_projections(self):
         #Either it is a linear layer and has requires_grad or it is a quantized (bnb) layer and has require_grad_W
         self.lora_A.weight.data = torch.zeros(self.lora_A_shape, device=self.device, dtype=self.compute_dtype)
         self.lora_B.weight.data = torch.zeros(self.lora_B_shape, device=self.device, dtype=self.compute_dtype)
-        
+
         assert isinstance(self.W, nn.Linear) or self.W.require_grad_W 
         #TODO ensure this is correct wrt W being transposed or not
         if isinstance(self.W, LinearNF4WithGradient):
@@ -644,8 +809,11 @@ class LoraLinear(nn.Module):
                 dist.all_reduce(self.W.weight.grad, op=dist.ReduceOp.AVG)
                 dist.barrier()
             W_grad = self.W.weight.grad.T #Weight is stored as transpose in nn.linear
-            
-        assert not torch.all(W_grad == 0), "Gradient of W is zero"
+        
+        
+        if torch.all(W_grad == 0):
+            print("Gradient of W is zero")
+        #assert not torch.all(W_grad == 0), "Gradient of W is zero"
 
         # Compute the projection matrices using the unified function
         U_r, Q_r = compute_projection_matrix(W_grad, self.r, method=self.projection_method, out=self.projection_out)

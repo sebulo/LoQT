@@ -682,7 +682,6 @@ def main():
         for p in group['params']:
             num_trainable_params += p.numel()
     print('num_trainable_params in optimizer: ', num_trainable_params)
-    
 
     # Scheduler 
     lr_scheduler = get_scheduler(
