@@ -100,7 +100,7 @@ To save the original input model (e.g., a LLaMA2 model) without quantization and
 The original model (original_model.pth) will be saved in the same checkpoint directory as the quantized model with adapters (loqt_model.pth).
 
 ## Memory Usage
-To compare memory usage across different model configuraions, you can run the scripts in the folder `memory_profiling`. This script `all.sh` logs the memory usage of the model with and without quantization for LoQT, GaLore, and the regular Adam optimizer. The memory profiling is done for both 16-bit and 8-bit optimizers. Additionally, for GaLore and LoQT, per-layer gradient updates are also run.
+To compare memory usage across different model configurations, you can run the scripts in the folder `memory_profiling`. This script `all.sh` logs the memory usage of the model with and without quantization for LoQT, GaLore, and the regular Adam optimizer. The memory profiling is done for both 16-bit and 8-bit optimizers. Additionally, for GaLore and LoQT, per-layer gradient updates are also run.
 `13b_rank1024_loqt.sh` logs the memory usage of the 13B model with a rank of 1024 for LoQT.
 
 ### Running the Script
